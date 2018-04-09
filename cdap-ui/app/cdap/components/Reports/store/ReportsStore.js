@@ -22,6 +22,8 @@ const ReportsActions = {
   setList: 'REPORTS_SET_LIST',
   setDetails: 'REPORTS_SET_DETAILS',
   setTimeRange: 'REPORTS_SET_TIME_RANGE',
+  clearSelection: 'REPORTS_CUSTOMIZER_CLEAR',
+  setActiveId: 'REPORTS_SET_ACTIVE_ID',
   reset: 'REPORTS_RESET'
 };
 
@@ -50,7 +52,8 @@ const defaultTimeRangeState = {
 const defaultListState = {
   total: 0,
   reports: [],
-  offset: 0
+  offset: 0,
+  activeId: null
 };
 
 const defaultDetailsState = {
@@ -65,6 +68,7 @@ const customizer = (state = defaultCustomizerState, action = defaultAction) => {
         ...state,
         [action.payload.type]: !state[action.payload.type]
       };
+    case ReportsActions.clearSelection:
     case ReportsActions.reset:
       return defaultCustomizerState;
     default:
@@ -92,9 +96,15 @@ const list = (state = defaultListState, action = defaultAction) => {
   switch (action.type) {
     case ReportsActions.setList:
       return {
-        total: action.payload.total,
-        reports: action.payload.reports,
-        offset: action.payload.offset
+        total: action.payload.list.total,
+        reports: action.payload.list.reports,
+        offset: action.payload.list.offset,
+        activeId: action.payload.activeId
+      };
+    case ReportsActions.setActiveId:
+      return {
+        ...state,
+        activeId: action.payload.activeId
       };
     case ReportsActions.reset:
       return defaultListState;

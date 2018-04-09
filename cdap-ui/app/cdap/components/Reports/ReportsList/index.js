@@ -16,15 +16,14 @@
 
 import React, { Component } from 'react';
 import PropTypes from 'prop-types';
-import {MyReportsApi} from 'api/reports';
 import Customizer from 'components/Reports/Customizer';
 import {humanReadableDate} from 'services/helpers';
 import IconSVG from 'components/IconSVG';
-import ReportsStore, {ReportsActions} from 'components/Reports/store/ReportsStore';
 import {connect} from 'react-redux';
 import Duration from 'components/Duration';
 import { Link } from 'react-router-dom';
 import {getCurrentNamespace} from 'services/NamespaceStore';
+import {listReports} from 'components/Reports/store/ActionCreator';
 
 require('./ReportsList.scss');
 
@@ -34,23 +33,16 @@ class ReportsListView extends Component {
   };
 
   componentWillMount() {
-    let params = {
-      offset: 0,
-      limit: 20
-    };
-
-    MyReportsApi.list(params)
-      .subscribe((res) => {
-        ReportsStore.dispatch({
-          type: ReportsActions.setList,
-          payload: res
-        });
-      });
+    listReports();
   }
 
   renderCreated(report) {
     if (report.status === 'COMPLETED') {
       return humanReadableDate(report.created);
+    }
+
+    if (report.status === 'FAILED') {
+      return 'Failed';
     }
 
     return (
@@ -89,6 +81,8 @@ class ReportsListView extends Component {
   }
 
   renderBody() {
+    console.log('List', this.props.reports);
+
     return (
       <div className="grid-body">
         {
@@ -99,7 +93,7 @@ class ReportsListView extends Component {
                 to={`/ns/${getCurrentNamespace()}/reports/${report.id}`}
                 className="grid-row grid-link"
               >
-                <div className="report-name">{report.name}</div>
+                <div className="report-name">{report.id}</div>
                 <div>
                   {this.renderCreated(report)}
                 </div>
@@ -114,6 +108,34 @@ class ReportsListView extends Component {
             );
           })
         }
+      </div>
+    );
+  }
+
+  renderEmpty() {
+    return (
+      <div className="list-container empty">
+        <div className="text-xs-center">
+          No reports are available
+        </div>
+        <div className="text-xs-center">
+          Make a selection to specify your criteria and generate new report.
+        </div>
+      </div>
+    );
+  }
+
+  renderTable() {
+    if (this.props.reports.length === 0) {
+      return this.renderEmpty();
+    }
+
+    return (
+      <div className="list-container grid-wrapper">
+        <div className="grid grid-container">
+          {this.renderHeader()}
+          {this.renderBody()}
+        </div>
       </div>
     );
   }
@@ -134,12 +156,7 @@ class ReportsListView extends Component {
               Select a report to view
             </div>
 
-            <div className="list-container grid-wrapper">
-              <div className="grid grid-container">
-                {this.renderHeader()}
-                {this.renderBody()}
-              </div>
-            </div>
+            {this.renderTable()}
           </div>
         </div>
       </div>

@@ -19,6 +19,7 @@ import IconSVG from 'components/IconSVG';
 import ColumnsSelector from 'components/Reports/Customizer/ColumnsSelector';
 import TimeRangeSelector from 'components/Reports/Customizer/TimeRangeSelector';
 import AppTypeSelector from 'components/Reports/Customizer/AppTypeSelector';
+import ActionButtons from 'components/Reports/Customizer/ActionButtons';
 import classnames from 'classnames';
 
 require('./Customizer.scss');
@@ -53,15 +54,7 @@ export default class Customizer extends Component {
           <TimeRangeSelector />
         </div>
 
-        <div className="action-buttons">
-          <button className="btn btn-primary">
-            Generate Report
-          </button>
-
-          <button className="btn btn-link">
-            Cancel
-          </button>
-        </div>
+        <ActionButtons />
       </div>
     );
   };

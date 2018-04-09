@@ -18,11 +18,16 @@ import {apiCreator} from 'services/resource-helper';
 import DataSourceConfigurer from 'services/datasource/DataSourceConfigurer';
 let dataSrc = DataSourceConfigurer.getInstance();
 
-let basepath = `/reports/:reportId`;
+let appPath = '/namespaces/system/apps/ReportGenerationApp';
+let programPath = `${appPath}/spark/ReportGenerationSpark`;
+
+let methodsPath = `${programPath}/methods`;
+let basepath = `${methodsPath}/reports/:reportId`;
 
 export const MyReportsApi = {
-  list: apiCreator(dataSrc, 'GET', 'REQUEST', '/reports'),
+  list: apiCreator(dataSrc, 'GET', 'REQUEST', `${methodsPath}/reports`),
   getReport: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}/details`),
+  generateReport: apiCreator(dataSrc, 'POST', 'REQUEST', `${methodsPath}/reports`),
 
   // temporary API until spark app is finished
   getSummary: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}/summary`),
