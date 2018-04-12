@@ -32,8 +32,8 @@ export function getData(start, duration = 1440, namespaces = DashboardStore.getS
   let state = DashboardStore.getState().dashboard;
 
   if (!start) {
-    start = moment().subtract(24, 'h').format('x');
-    start = parseInt(start, 10);
+    start = moment().subtract(23, 'h').format('x');
+    start = Math.floor(parseInt(start, 10) / 1000);
   }
 
   let namespacesList = [...namespaces, getCurrentNamespace()];

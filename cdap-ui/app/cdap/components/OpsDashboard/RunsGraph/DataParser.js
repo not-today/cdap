@@ -38,11 +38,11 @@ export function parseDashboardData(rawData, startTime, duration, pipeline, custo
       if (!customApp) { return; }
     }
 
-    let startTime = getBucket(runInfo.start);
-    let endTime = getBucket(runInfo.end);
+    let startTime = getBucket(runInfo.start * 1000);
+    let endTime = getBucket(runInfo.end * 1000);
 
     // add start method
-    if (runInfo.startMethod === 'Manual') {
+    if (runInfo.startMethod === 'manual') {
       buckets[startTime].manual++;
     } else {
       buckets[startTime].schedule++;
@@ -63,8 +63,11 @@ export function parseDashboardData(rawData, startTime, duration, pipeline, custo
       buckets[endTime].runsList.push(runInfo);
     }
 
+    // if end time is not present, that means the program is still running
+    let end = runInfo.end || Date.now();
+
     // add running
-    let duration = runInfo.end - runInfo.start;
+    let duration = end - runInfo.start;
     duration = moment.duration(duration).asHours();
     duration = parseInt(duration, 10);
 
@@ -83,7 +86,6 @@ export function parseDashboardData(rawData, startTime, duration, pipeline, custo
   timeArray.forEach((time) => {
     buckets[time].runsList = uniqWith(buckets[time].runsList, isEqual);
   });
-
 
   let data = Object.keys(buckets).map((time) => {
     return {
@@ -109,16 +111,20 @@ function setBuckets(startTime, duration) {
   let buckets = {};
   let timeArray = [];
 
+  let start = startTime * 1000;
+
   // hourly or per 5 minutes
   let numBuckets = duration === 1440 ? 24 : 12;
 
   for (let i = 0; i < numBuckets; i++) {
-    let time = moment(startTime).startOf('hour');
+    let time = moment(start).startOf('hour');
     if (duration === 1440) {
       time = time.add(i, 'h').format('x');
     } else {
       time = time.add(i*5, 'm').format('x');
     }
+
+    // time = time * 1000;
 
     timeArray.push(time);
     buckets[time] = {
