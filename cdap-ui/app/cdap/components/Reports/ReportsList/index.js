@@ -24,16 +24,27 @@ import Duration from 'components/Duration';
 import { Link } from 'react-router-dom';
 import {getCurrentNamespace} from 'services/NamespaceStore';
 import {listReports} from 'components/Reports/store/ActionCreator';
+import {Observable} from 'rxjs/Observable';
+import classnames from 'classnames';
 
 require('./ReportsList.scss');
 
 class ReportsListView extends Component {
   static propTypes = {
-    reports: PropTypes.array
+    reports: PropTypes.array,
+    activeId: PropTypes.string
   };
 
   componentWillMount() {
     listReports();
+    this.interval$ = Observable.interval(10000)
+      .subscribe(listReports);
+  }
+
+  componentWillUnmount() {
+    if (this.interval$) {
+      this.interval$.unsubscribe();
+    }
   }
 
   renderCreated(report) {
@@ -81,8 +92,6 @@ class ReportsListView extends Component {
   }
 
   renderBody() {
-    console.log('List', this.props.reports);
-
     return (
       <div className="grid-body">
         {
@@ -91,9 +100,9 @@ class ReportsListView extends Component {
               <Link
                 key={report.id}
                 to={`/ns/${getCurrentNamespace()}/reports/${report.id}`}
-                className="grid-row grid-link"
+                className={classnames('grid-row grid-link', {'active': report.id === this.props.activeId})}
               >
-                <div className="report-name">{report.id}</div>
+                <div className="report-name">{report.name}</div>
                 <div>
                   {this.renderCreated(report)}
                 </div>
@@ -166,7 +175,8 @@ class ReportsListView extends Component {
 
 const mapStateToProps = (state) => {
   return {
-    reports: state.list.reports
+    reports: state.list.reports,
+    activeId: state.list.activeId
   };
 };
 

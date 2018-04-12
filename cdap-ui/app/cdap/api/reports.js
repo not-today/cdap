@@ -26,10 +26,7 @@ let basepath = `${methodsPath}/reports/:reportId`;
 
 export const MyReportsApi = {
   list: apiCreator(dataSrc, 'GET', 'REQUEST', `${methodsPath}/reports`),
-  getReport: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}/details`),
-  generateReport: apiCreator(dataSrc, 'POST', 'REQUEST', `${methodsPath}/reports`),
-
-  // temporary API until spark app is finished
-  getSummary: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}/summary`),
-  getRuns: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}/runs`)
+  getDetails: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}/details`),
+  getReport: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}`),
+  generateReport: apiCreator(dataSrc, 'POST', 'REQUEST', `${methodsPath}/reports`)
 };

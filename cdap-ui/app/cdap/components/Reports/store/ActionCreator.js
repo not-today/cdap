@@ -17,22 +17,26 @@
 import ReportsStore, {ReportsActions} from 'components/Reports/store/ReportsStore';
 import moment from 'moment';
 import {MyReportsApi} from 'api/reports';
+import orderBy from 'lodash/orderBy';
 
 export function generateReport() {
   let date = moment().format('MM-DD-YYYY HH:mm:ss A');
 
-  let start = moment().subtract(30, 'm').format('x');
-  let end = moment().format('x');
+  // let start = moment().subtract(30, 'm').format('x');
+  // let end = moment().format('x');
+  let start = 1520808000 - 1000;
+  let end = 1520813000 + 1000;
 
   let selections = ReportsStore.getState().customizer;
 
   let defaultSelection = [
-    'artifact.scope',
-    'artifact.name',
-    'artifact.version',
-    'application.name',
+    // 'application.name',
     'program',
-    'namespace'
+    'namespace',
+    // 'status',
+    'start',
+    'end',
+    'duration'
   ];
 
   const FILTER_OUT = ['pipelines', 'customApps'];
@@ -66,6 +70,8 @@ export function listReports(id) {
 
   MyReportsApi.list(params)
     .subscribe((res) => {
+      res.reports = orderBy(res.reports, ['created'], ['desc']);
+
       ReportsStore.dispatch({
         type: ReportsActions.setList,
         payload: {

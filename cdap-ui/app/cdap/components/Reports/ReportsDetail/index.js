@@ -23,12 +23,16 @@ import ReportsStore, { ReportsActions } from 'components/Reports/store/ReportsSt
 import { Link } from 'react-router-dom';
 import {getCurrentNamespace} from 'services/NamespaceStore';
 import IconSVG from 'components/IconSVG';
+import {connect} from 'react-redux';
+import {humanReadableDate} from 'services/helpers';
 
 require('./ReportsDetail.scss');
 
-export default class ReportsDetail extends Component {
+class ReportsDetailView extends Component {
   static propTypes = {
-    match: PropTypes.object
+    match: PropTypes.object,
+    created: PropTypes.number,
+    reportName: PropTypes.string
   };
 
   componentWillMount() {
@@ -36,16 +40,19 @@ export default class ReportsDetail extends Component {
       reportId: this.props.match.params.reportId
     };
 
-    MyReportsApi.getSummary(params)
-      .combineLatest(MyReportsApi.getRuns(params))
-      .subscribe(([summary, runsInfo]) => {
+    MyReportsApi.getReport(params)
+      .combineLatest(MyReportsApi.getDetails(params))
+      .subscribe(([info, reportDetail]) => {
         ReportsStore.dispatch({
           type: ReportsActions.setDetails,
           payload: {
-            runs: runsInfo.runs,
-            summary
+            runs: reportDetail.details,
+            info
           }
         });
+
+        console.log('info', info);
+        console.log('detail', reportDetail);
       });
   }
 
@@ -60,7 +67,7 @@ export default class ReportsDetail extends Component {
             </Link>
             <span className="separator">|</span>
             <span>
-              {this.props.match.params.reportId}
+              {this.props.reportName}
             </span>
           </div>
         </div>
@@ -68,7 +75,7 @@ export default class ReportsDetail extends Component {
         <div className="reports-detail-container">
           <div className="action-section clearfix">
             <div className="date-container float-xs-left">
-              Report generated on some date
+              Report generated on {humanReadableDate(this.props.created)}
             </div>
 
             <div className="action-button float-xs-right">
@@ -90,3 +97,17 @@ export default class ReportsDetail extends Component {
     );
   }
 }
+
+const mapStateToProps = (state, ownProps) => {
+  return {
+    match: ownProps.match,
+    created: state.details.created,
+    reportName: state.details.name
+  };
+};
+
+const ReportsDetail = connect(
+  mapStateToProps
+)(ReportsDetailView);
+
+export default ReportsDetail;

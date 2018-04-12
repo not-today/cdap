@@ -21,6 +21,7 @@ $border-color: $grey-03;
 $table-color: white;
 $grid-link-color: $grey-01;
 $empty-color: $grey-02;
+$active-border-color: $green-01;
 
 .reports-list-container {
   .customizer-container {
@@ -62,7 +63,13 @@ $empty-color: $grey-02;
           grid-template-columns: 2fr 250px 250px 1fr 50px;
         }
 
-        .grid-link { color: $grid-link-color; }
+        .grid-link {
+          color: $grid-link-color;
+
+          &.active {
+            border: 2px solid $active-border-color;
+          }
+        }
       }
 
       .grid-header { font-weight: bold; }

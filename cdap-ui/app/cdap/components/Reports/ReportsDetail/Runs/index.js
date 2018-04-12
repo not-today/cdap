@@ -25,6 +25,8 @@ require('./Runs.scss');
 const PIPELINES = [GLOBALS.etlDataPipeline, GLOBALS.etlDataStreams];
 
 function getName(run) {
+  if (!run.application) { return '--'; }
+
   let name = run.application.name;
 
   if (PIPELINES.indexOf(run.artifact.name) == -1) {
@@ -45,62 +47,120 @@ function getType(run) {
   }
 }
 
-function renderHeader() {
+function renderHeader(headers) {
   return (
     <div className="grid-header">
       <div className="grid-row">
-        <div>Namespace</div>
-        <div>Name</div>
-        <div>Type</div>
-        <div>Duration</div>
-        <div>Start time</div>
-        <div>End time</div>
-        <div>User</div>
-        <div>Start method</div>
-        <div># Log errors</div>
-        <div># Log warnings</div>
-        <div># Records out</div>
+        {
+          headers.map((head) => {
+            return (
+              <div>
+                {head}
+              </div>
+            );
+          })
+        }
       </div>
     </div>
   );
+
+  // return (
+  //   <div className="grid-header">
+  //     <div className="grid-row">
+  //       <div>Namespace</div>
+  //       <div>Name</div>
+  //       <div>Type</div>
+  //       <div>Duration</div>
+  //       <div>Start time</div>
+  //       <div>End time</div>
+  //       <div>User</div>
+  //       <div>Start method</div>
+  //       <div># Log errors</div>
+  //       <div># Log warnings</div>
+  //       <div># Records out</div>
+  //     </div>
+  //   </div>
+  // );
 }
 
-function renderBody(runs) {
+function renderBody(runs, headers) {
   return (
     <div className="grid-body">
       {
-        runs.map((run, i) => {
+        runs.map((runInfo, i) => {
+          let run = JSON.parse(runInfo);
+
           return (
             <div
               key={i}
               className="grid-row"
             >
-              <div>{run.namespace}</div>
-              <div>{getName(run)}</div>
-              <div>{getType(run)}</div>
-              <div>{run.duration}</div>
-              <div>{humanReadableDate(run.start)}</div>
-              <div>{humanReadableDate(run.end)}</div>
-              <div>{run.user}</div>
-              <div>{run.startMethod}</div>
-              <div>{run.numLogErrors}</div>
-              <div>{run.numLogWarnings}</div>
-              <div>{run.numRecordsOut}</div>
+              {
+                headers.map((head) => {
+                  return (
+                    <div>
+                      {run[head]}
+                    </div>
+                  );
+                })
+              }
             </div>
           );
         })
       }
     </div>
   );
+
+
+
+  // return (
+  //   <div className="grid-body">
+  //     {
+  //       runs.map((runInfo, i) => {
+  //         let run = JSON.parse(runInfo);
+
+  //         return (
+  //           <div
+  //             key={i}
+  //             className="grid-row"
+  //           >
+  //             <div>{run.namespace}</div>
+  //             <div>{getName(run)}</div>
+  //             <div>{getType(run)}</div>
+  //             <div>{run.duration}</div>
+  //             <div>{humanReadableDate(run.start)}</div>
+  //             <div>{humanReadableDate(run.end)}</div>
+  //             <div>{run.user}</div>
+  //             <div>{run.startMethod}</div>
+  //             <div>{run.numLogErrors}</div>
+  //             <div>{run.numLogWarnings}</div>
+  //             <div>{run.numRecordsOut}</div>
+  //           </div>
+  //         );
+  //       })
+  //     }
+  //   </div>
+  // );
+}
+
+function getHeaders(runs) {
+  if (!runs.length) { return []; }
+  let headers = JSON.parse(runs[0]);
+  headers = Object.keys(headers);
+  return headers;
 }
 
 function RunsView({runs}) {
+  console.log('runs', runs);
+
+  let headers = getHeaders(runs);
+
   return (
     <div className="reports-runs-container">
       <div className="grid-wrapper">
         <div className="grid grid-container">
-          {renderHeader()}
-          {renderBody(runs)}
+          {renderHeader(headers)}
+          {renderBody(runs, headers)}
         </div>
       </div>
     </div>
