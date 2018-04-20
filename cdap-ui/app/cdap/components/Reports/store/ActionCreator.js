@@ -22,18 +22,17 @@ import orderBy from 'lodash/orderBy';
 export function generateReport() {
   let date = moment().format('MM-DD-YYYY HH:mm:ss A');
 
-  // let start = moment().subtract(30, 'm').format('x');
-  // let end = moment().format('x');
-  let start = 1520808000 - 1000;
-  let end = 1520813000 + 1000;
+  let start = moment().subtract(30, 'm').format('x');
+  let end = moment().format('x');
 
   let selections = ReportsStore.getState().customizer;
 
   let defaultSelection = [
-    // 'application.name',
+    // 'applicationName',
+    'artifactName',
     'program',
     'namespace',
-    // 'status',
+    'status',
     'start',
     'end',
     'duration'

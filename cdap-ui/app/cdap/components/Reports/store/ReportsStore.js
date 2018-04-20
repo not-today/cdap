@@ -20,8 +20,9 @@ import {defaultAction} from 'services/helpers';
 const ReportsActions = {
   toggleCustomizerOption: 'REPORTS_TOGGLE_CUSTOMIZER_OPTION',
   setList: 'REPORTS_SET_LIST',
-  setDetails: 'REPORTS_SET_DETAILS',
   setTimeRange: 'REPORTS_SET_TIME_RANGE',
+  setRuns: 'REPORTS_SET_RUNS',
+  setInfoStatus: 'REPORTS_SET_INFO_STATUS',
   clearSelection: 'REPORTS_CUSTOMIZER_CLEAR',
   setActiveId: 'REPORTS_SET_ACTIVE_ID',
   reset: 'REPORTS_RESET'
@@ -63,7 +64,8 @@ const defaultDetailsState = {
   request: {},
   status: null,
   summary: {},
-  runs: []
+  runs: [],
+  error: null
 };
 
 const customizer = (state = defaultCustomizerState, action = defaultAction) => {
@@ -120,10 +122,14 @@ const list = (state = defaultListState, action = defaultAction) => {
 
 const details = (state = defaultDetailsState, action = defaultAction) => {
   switch (action.type) {
-    case ReportsActions.setDetails:
+    case ReportsActions.setInfoStatus:
       return {
         ...state,
-        ...action.payload.info,
+        ...action.payload.info
+      };
+    case ReportsActions.setRuns:
+      return {
+        ...state,
         runs: action.payload.runs
       };
     case ReportsActions.reset:

@@ -18,6 +18,8 @@ import moment from 'moment';
 import uniqWith from 'lodash/uniqWith';
 import isEqual from 'lodash/isEqual';
 
+const DAY_IN_SEC = 24 * 60 * 60;
+
 export function parseDashboardData(rawData, startTime, duration, pipeline, customApp) {
   let {
     buckets,
@@ -114,17 +116,15 @@ function setBuckets(startTime, duration) {
   let start = startTime * 1000;
 
   // hourly or per 5 minutes
-  let numBuckets = duration === 1440 ? 24 : 12;
+  let numBuckets = duration === DAY_IN_SEC ? 24 : 12;
 
   for (let i = 0; i < numBuckets; i++) {
     let time = moment(start).startOf('hour');
-    if (duration === 1440) {
+    if (duration === DAY_IN_SEC) {
       time = time.add(i, 'h').format('x');
     } else {
       time = time.add(i*5, 'm').format('x');
     }
-
-    // time = time * 1000;
 
     timeArray.push(time);
     buckets[time] = {

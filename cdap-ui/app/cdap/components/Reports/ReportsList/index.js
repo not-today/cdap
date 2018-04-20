@@ -96,11 +96,16 @@ class ReportsListView extends Component {
       <div className="grid-body">
         {
           this.props.reports.map((report) => {
+            let Tag = report.status === 'RUNNING' ? 'div' : Link;
+
             return (
-              <Link
+              <Tag
                 key={report.id}
-                to={`/ns/${getCurrentNamespace()}/reports/${report.id}`}
-                className={classnames('grid-row grid-link', {'active': report.id === this.props.activeId})}
+                to={`/ns/${getCurrentNamespace()}/reports/details/${report.id}`}
+                className={classnames('grid-row grid-link', {
+                  'active': report.id === this.props.activeId,
+                  'not-allowed': report.status === 'RUNNING'
+                })}
               >
                 <div className="report-name">{report.name}</div>
                 <div>
@@ -113,7 +118,7 @@ class ReportsListView extends Component {
                 <div>
                   <IconSVG name="icon-cog" />
                 </div>
-              </Link>
+              </Tag>
             );
           })
         }

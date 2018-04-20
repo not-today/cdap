@@ -66,9 +66,9 @@ $active-border-color: $green-01;
         .grid-link {
           color: $grid-link-color;
 
-          &.active {
-            border: 2px solid $active-border-color;
-          }
+          &.active { border: 2px solid $active-border-color; }
+
+          &.not-allowed { cursor: not-allowed; }
         }
       }
 

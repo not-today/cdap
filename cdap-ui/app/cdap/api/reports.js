@@ -28,5 +28,14 @@ export const MyReportsApi = {
   list: apiCreator(dataSrc, 'GET', 'REQUEST', `${methodsPath}/reports`),
   getDetails: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}/details`),
   getReport: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}`),
-  generateReport: apiCreator(dataSrc, 'POST', 'REQUEST', `${methodsPath}/reports`)
+  generateReport: apiCreator(dataSrc, 'POST', 'REQUEST', `${methodsPath}/reports`),
+
+  // report service lifecycle
+  getApp: apiCreator(dataSrc, 'GET', 'REQUEST', appPath),
+  startService: apiCreator(dataSrc, 'POST', 'REQUEST', `${programPath}/start`),
+  stopService: apiCreator(dataSrc, 'POST', 'REQUEST', `${programPath}/stop`),
+  pollServiceStatus: apiCreator(dataSrc, 'GET', 'POLL', `${programPath}/status`),
+  createApp: apiCreator(dataSrc, 'PUT', 'REQUEST', `${appPath}`),
+  ping: apiCreator(dataSrc, 'GET', 'REQUEST', `${methodsPath}/reports`),
+  deleteApp: apiCreator(dataSrc, 'DELETE', 'REQUEST', appPath)
 };

@@ -32,29 +32,109 @@ class ReportsDetailView extends Component {
   static propTypes = {
     match: PropTypes.object,
     created: PropTypes.number,
-    reportName: PropTypes.string
+    reportName: PropTypes.string,
+    error: PropTypes.string,
+    status: PropTypes.string
   };
 
   componentWillMount() {
+    this.fetchStatus();
+
+
+
+    // MyReportsApi.getReport(params)
+    //   .combineLatest(MyReportsApi.getDetails(params))
+    //   .subscribe(([info, reportDetail]) => {
+    //     ReportsStore.dispatch({
+    //       type: ReportsActions.setDetails,
+    //       payload: {
+    //         runs: reportDetail.details,
+    //         info
+    //       }
+    //     });
+
+    //     console.log('info', info);
+    //     console.log('detail', reportDetail);
+    //   });
+  }
+
+  fetchStatus = () => {
     let params = {
       reportId: this.props.match.params.reportId
     };
 
     MyReportsApi.getReport(params)
-      .combineLatest(MyReportsApi.getDetails(params))
-      .subscribe(([info, reportDetail]) => {
+      .subscribe((res) => {
+        console.log('res', res);
         ReportsStore.dispatch({
-          type: ReportsActions.setDetails,
+          type: ReportsActions.setInfoStatus,
           payload: {
-            runs: reportDetail.details,
-            info
+            info: res
           }
         });
 
-        console.log('info', info);
-        console.log('detail', reportDetail);
+        if (res.status === 'COMPLETED') {
+          this.fetchDetails();
+        }
       });
-  }
+  };
+
+  fetchDetails = () => {
+    let params = {
+      reportId: this.props.match.params.reportId
+    };
+
+    MyReportsApi.getDetails(params)
+      .subscribe((res) => {
+        console.log('details', res);
+
+        ReportsStore.dispatch({
+          type: ReportsActions.setRuns,
+          payload: {
+            runs: res.details
+          }
+        });
+      });
+  };
+
+  renderError = () => {
+    return (
+      <div className="error-container">
+        <h5 className="text-danger">Report Generation Failed</h5>
+        <pre>{this.props.error}</pre>
+      </div>
+    );
+  };
+
+  renderDetail = () => {
+    if (this.props.status === 'FAILED' && this.props.error) {
+      return this.renderError();
+    }
+
+    return (
+      <div className="reports-detail-container">
+        <div className="action-section clearfix">
+          <div className="date-container float-xs-left">
+            Report generated on {humanReadableDate(this.props.created)}
+          </div>
+
+          <div className="action-button float-xs-right">
+            <button className="btn btn-primary">
+              Save Report
+            </button>
+
+            <button className="btn btn-link">
+              Export?
+            </button>
+          </div>
+        </div>
+
+        <Summary />
+
+        <Runs />
+      </div>
+    );
+  };
 
   render() {
     return (
@@ -72,27 +152,7 @@ class ReportsDetailView extends Component {
           </div>
         </div>
 
-        <div className="reports-detail-container">
-          <div className="action-section clearfix">
-            <div className="date-container float-xs-left">
-              Report generated on {humanReadableDate(this.props.created)}
-            </div>
-
-            <div className="action-button float-xs-right">
-              <button className="btn btn-primary">
-                Save Report
-              </button>
-
-              <button className="btn btn-link">
-                Export?
-              </button>
-            </div>
-          </div>
-
-          <Summary />
-
-          <Runs />
-        </div>
+        {this.renderDetail()}
       </div>
     );
   }
@@ -102,7 +162,9 @@ const mapStateToProps = (state, ownProps) => {
   return {
     match: ownProps.match,
     created: state.details.created,
-    reportName: state.details.name
+    reportName: state.details.name,
+    error: state.details.error,
+    status: state.details.status
   };
 };
 
