@@ -27,16 +27,41 @@ export function generateReport() {
 
   let selections = ReportsStore.getState().customizer;
 
+  // let defaultSelection = [
+  //   'applicationName',
+  //   'artifactName',
+  //   'program',
+  //   'namespace',
+  //   'status',
+  //   'start',
+  //   'end',
+  //   'duration',
+  //   'type'
+  // ];
+
   let defaultSelection = [
-    // 'applicationName',
-    'artifactName',
-    'program',
     'namespace',
+    'artifactScope',
+    'artifactName',
+    'artifactVersion',
+    'applicationName',
+    // 'applicationVersion',
+    'programType',
+    'program',
+    'run',
     'status',
     'start',
+    'running',
     'end',
-    'duration'
+    'duration',
+    'user',
+    'startMethod',
+    // 'runtimeArguments',
+    'numLogWarnings',
+    'numLogErrors',
+    'numRecordsOut'
   ];
+
 
   const FILTER_OUT = ['pipelines', 'customApps'];
 
