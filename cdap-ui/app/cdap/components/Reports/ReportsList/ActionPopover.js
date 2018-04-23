@@ -71,21 +71,23 @@ export default class ActionPopover extends Component {
 
         let hasArtifactFilter = false;
 
-        request.filters.forEach((filter) => {
-          if (filter.fieldName === 'status') {
-            payload.status = filter.whitelist;
-          } else if (filter.fieldName === 'artifact') {
-            if (filter.whitelist) {
-              payload.selections.pipelines = true;
-            } else if (filter.blacklist) {
-              payload.selections.customApps = true;
+        if (request.filters && request.filters.length > 0) {
+          request.filters.forEach((filter) => {
+            if (filter.fieldName === 'status') {
+              payload.status = filter.whitelist;
+            } else if (filter.fieldName === 'artifact') {
+              if (filter.whitelist) {
+                payload.selections.pipelines = true;
+              } else if (filter.blacklist) {
+                payload.selections.customApps = true;
+              }
+
+              hasArtifactFilter = true;
             }
+          });
+        }
 
-            hasArtifactFilter = true;
-          }
-        });
-
-        if (!hasArtifactFilter){
+        if (!hasArtifactFilter) {
           payload.selections.pipelines = true;
           payload.selections.customApps = true;
         }

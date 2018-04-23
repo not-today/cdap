@@ -16,7 +16,6 @@
 
 import moment from 'moment';
 import uniqBy from 'lodash/uniqBy';
-import isEqual from 'lodash/isEqual';
 
 const DAY_IN_SEC = 24 * 60 * 60;
 

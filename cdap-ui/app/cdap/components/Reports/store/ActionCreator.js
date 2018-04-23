@@ -60,7 +60,11 @@ function getName(start, end) {
   let startDate = moment(start * 1000).format(format);
   let endDate = moment(end * 1000).format(format);
 
-  return `Successful Runs - ${startDate} to ${endDate}`;
+  let statusSelections = ReportsStore.getState().status.selections;
+
+  let statusLabel = statusSelections.join(', ');
+
+  return `${statusLabel} Runs - ${startDate} to ${endDate}`;
 }
 
 function getFilters() {
@@ -136,7 +140,7 @@ export function generateReport() {
 
   let filters = getFilters();
   if (filters.length > 0) {
-    requestBody[filters] = filters;
+    requestBody.filters = filters;
   }
 
   MyReportsApi.generateReport(null, requestBody)

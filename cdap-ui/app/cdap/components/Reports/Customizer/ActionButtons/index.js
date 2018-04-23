@@ -49,7 +49,8 @@ function ActionButtonsView({clearSelection, timeRange, customizer, status}) {
 ActionButtonsView.propTypes = {
   clearSelection: PropTypes.func,
   timeRange: PropTypes.object,
-  customizer: PropTypes.object
+  customizer: PropTypes.object,
+  status: PropTypes.object
 };
 
 const mapStateToProps = (state) => {
