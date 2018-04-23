@@ -26,6 +26,7 @@ const ReportsActions = {
   setInfoStatus: 'REPORTS_SET_INFO_STATUS',
   clearSelection: 'REPORTS_CUSTOMIZER_CLEAR',
   setActiveId: 'REPORTS_SET_ACTIVE_ID',
+  setStatus: 'REPORTS_SET_STATUS',
   reset: 'REPORTS_RESET'
 };
 
@@ -43,6 +44,10 @@ const defaultCustomizerState = {
   numLogWarnings: false,
   numLogErrors: false,
   numRecordsOut: false
+};
+
+const defaultStatusState = {
+  selections: []
 };
 
 const defaultTimeRangeState = {
@@ -84,6 +89,21 @@ const customizer = (state = defaultCustomizerState, action = defaultAction) => {
     case ReportsActions.clearSelection:
     case ReportsActions.reset:
       return defaultCustomizerState;
+    default:
+      return state;
+  }
+};
+
+const status = (state = defaultStatusState, action = defaultAction) => {
+  switch (action.type) {
+    case ReportsActions.setStatus:
+      return {
+        ...state,
+        selections: action.payload.selections
+      };
+    case ReportsActions.clearSelection:
+    case ReportsActions.reset:
+      return defaultStatusState;
     default:
       return state;
   }
@@ -154,12 +174,14 @@ const details = (state = defaultDetailsState, action = defaultAction) => {
 const ReportsStore = createStore(
   combineReducers({
     customizer,
+    status,
     list,
     details,
     timeRange
   }),
   {
-    reports: defaultCustomizerState,
+    customizer: defaultCustomizerState,
+    status: defaultStatusState,
     list: defaultListState,
     details: defaultDetailsState,
     timeRange: defaultTimeRangeState

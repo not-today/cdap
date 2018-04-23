@@ -20,6 +20,7 @@ import ColumnsSelector from 'components/Reports/Customizer/ColumnsSelector';
 import TimeRangeSelector from 'components/Reports/Customizer/TimeRangeSelector';
 import AppTypeSelector from 'components/Reports/Customizer/AppTypeSelector';
 import ActionButtons from 'components/Reports/Customizer/ActionButtons';
+import StatusSelector from 'components/Reports/Customizer/StatusSelector';
 import classnames from 'classnames';
 
 require('./Customizer.scss');
@@ -43,11 +44,7 @@ export default class Customizer extends Component {
         <div className="options-container">
           <AppTypeSelector />
 
-          <div className="status-selector">
-            <div className="title">
-              Select Status
-            </div>
-          </div>
+          <StatusSelector />
 
           <ColumnsSelector />
 
