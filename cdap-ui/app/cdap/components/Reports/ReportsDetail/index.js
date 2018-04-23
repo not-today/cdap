@@ -48,7 +48,6 @@ class ReportsDetailView extends Component {
 
     MyReportsApi.getReport(params)
       .subscribe((res) => {
-        console.log('res', res);
         ReportsStore.dispatch({
           type: ReportsActions.setInfoStatus,
           payload: {
@@ -69,8 +68,6 @@ class ReportsDetailView extends Component {
 
     MyReportsApi.getDetails(params)
       .subscribe((res) => {
-        console.log('details', res);
-
         ReportsStore.dispatch({
           type: ReportsActions.setRuns,
           payload: {

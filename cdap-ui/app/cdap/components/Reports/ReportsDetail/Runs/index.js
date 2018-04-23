@@ -125,8 +125,6 @@ function getHeaders(request) {
 }
 
 function RunsView({runs, request}) {
-  console.log('runs', runs);
-
   let headers = getHeaders(request);
 
   return (
