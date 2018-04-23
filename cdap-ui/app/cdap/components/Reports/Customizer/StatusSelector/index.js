@@ -15,7 +15,6 @@
  */
 
 import React from 'react';
-// import PropTypes from 'prop-types';
 import StatusPopover from 'components/Reports/Customizer/StatusSelector/StatusPopover';
 
 require('./StatusSelector.scss');

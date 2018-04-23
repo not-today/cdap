@@ -64,12 +64,35 @@ export default class ActionPopover extends Component {
           end: request.end
         };
 
+        let payload = {
+          selections,
+          timeRange
+        };
+
+        let hasArtifactFilter = false;
+
+        request.filters.forEach((filter) => {
+          if (filter.fieldName === 'status') {
+            payload.status = filter.whitelist;
+          } else if (filter.fieldName === 'artifact') {
+            if (filter.whitelist) {
+              payload.selections.pipelines = true;
+            } else if (filter.blacklist) {
+              payload.selections.customApps = true;
+            }
+
+            hasArtifactFilter = true;
+          }
+        });
+
+        if (!hasArtifactFilter){
+          payload.selections.pipelines = true;
+          payload.selections.customApps = true;
+        }
+
         ReportsStore.dispatch({
           type: ReportsActions.setSelections,
-          payload: {
-            selections,
-            timeRange
-          }
+          payload
         });
 
         // to close popover

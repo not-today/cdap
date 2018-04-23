@@ -43,11 +43,8 @@ export default class Customizer extends Component {
       <div>
         <div className="options-container">
           <AppTypeSelector />
-
           <StatusSelector />
-
           <ColumnsSelector />
-
           <TimeRangeSelector />
         </div>
 

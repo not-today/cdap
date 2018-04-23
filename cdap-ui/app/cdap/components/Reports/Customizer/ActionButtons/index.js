@@ -20,9 +20,10 @@ import {connect} from 'react-redux';
 import {ReportsActions} from 'components/Reports/store/ReportsStore';
 import {generateReport} from 'components/Reports/store/ActionCreator';
 
-function ActionButtonsView({clearSelection, timeRange, customizer}) {
+function ActionButtonsView({clearSelection, timeRange, customizer, status}) {
   let disabled = (!timeRange.selection) ||
-                  (!customizer.pipelines && !customizer.customApps);
+                  (!customizer.pipelines && !customizer.customApps) ||
+                  (status.selections.length === 0);
 
 
   return (
@@ -54,7 +55,8 @@ ActionButtonsView.propTypes = {
 const mapStateToProps = (state) => {
   return {
     timeRange: state.timeRange,
-    customizer: state.customizer
+    customizer: state.customizer,
+    status: state.status
   };
 };
 

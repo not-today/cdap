@@ -18,6 +18,7 @@ import ReportsStore, {ReportsActions} from 'components/Reports/store/ReportsStor
 import moment from 'moment';
 import {MyReportsApi} from 'api/reports';
 import orderBy from 'lodash/orderBy';
+import {GLOBALS} from 'services/global-constants';
 
 export const DefaultSelection = [
   'artifactName',
@@ -62,6 +63,37 @@ function getName(start, end) {
   return `Successful Runs - ${startDate} to ${endDate}`;
 }
 
+function getFilters() {
+  let filters = [];
+
+  let selections = ReportsStore.getState().customizer;
+
+  // pipelines vs custom apps
+  if (selections.pipelines && !selections.customApps) {
+    filters.push({
+      fieldName: 'artifactName',
+      whitelist: GLOBALS.etlPipelineTypes
+    });
+  } else if (!selections.pipelines && selections.customApps) {
+    filters.push({
+      fieldName: 'artifactName',
+      blacklist: GLOBALS.etlPipelineTypes
+    });
+  }
+
+  // status
+  let statusSelections = ReportsStore.getState().status.selections;
+
+  filters.push({
+    fieldName: 'status',
+    whitelist: statusSelections
+  });
+
+  // TODO: add namespace handler
+
+  return filters;
+}
+
 export function generateReport() {
   let {start, end} = getTimeRange();
 
@@ -101,6 +133,11 @@ export function generateReport() {
     end,
     fields
   };
+
+  let filters = getFilters();
+  if (filters.length > 0) {
+    requestBody[filters] = filters;
+  }
 
   MyReportsApi.generateReport(null, requestBody)
     .subscribe((res) => {

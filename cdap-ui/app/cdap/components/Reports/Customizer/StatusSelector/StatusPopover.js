@@ -39,6 +39,12 @@ class StatusPopoverView extends Component {
     selections: this.props.selections
   };
 
+  componentWillReceiveProps(nextProps) {
+    this.setState({
+      selections: nextProps.selections
+    });
+  }
+
   isSelected = (option) => {
     return this.state.selections.indexOf(option) !== -1;
   };

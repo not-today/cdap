@@ -101,6 +101,11 @@ const status = (state = defaultStatusState, action = defaultAction) => {
         ...state,
         selections: action.payload.selections
       };
+    case ReportsActions.setSelections:
+      return {
+        ...state,
+        selections: action.payload.status
+      };
     case ReportsActions.clearSelection:
     case ReportsActions.reset:
       return defaultStatusState;
