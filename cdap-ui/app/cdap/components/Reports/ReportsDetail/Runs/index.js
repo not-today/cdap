@@ -19,17 +19,19 @@ import PropTypes from 'prop-types';
 import {connect} from 'react-redux';
 import {GLOBALS} from 'services/global-constants';
 import {humanReadableDate} from 'services/helpers';
+import {DefaultSelection} from 'components/Reports/store/ActionCreator';
+import difference from 'lodash/difference';
 
 require('./Runs.scss');
 
 const PIPELINES = [GLOBALS.etlDataPipeline, GLOBALS.etlDataStreams];
 
 function getName(run) {
-  if (!run.application) { return '--'; }
+  if (!run.applicationName) { return '--'; }
 
-  let name = run.application.name;
+  let name = run.applicationName;
 
-  if (PIPELINES.indexOf(run.artifact.name) == -1) {
+  if (PIPELINES.indexOf(run.artifactName) == -1) {
     name = `${name} - ${run.program}`;
   }
 
@@ -37,13 +39,13 @@ function getName(run) {
 }
 
 function getType(run) {
-  switch (run.artifact.name) {
+  switch (run.artifactName) {
     case GLOBALS.etlDataPipeline:
       return 'Batch Pipeline';
     case GLOBALS.etlDataStreams:
       return 'Realtime Pipeline';
     default:
-      return run.type;
+      return run.programType;
   }
 }
 
@@ -51,6 +53,14 @@ function renderHeader(headers) {
   return (
     <div className="grid-header">
       <div className="grid-row">
+        <div>
+          Name
+        </div>
+
+        <div>
+          Type
+        </div>
+
         {
           headers.map((head) => {
             return (
@@ -63,43 +73,37 @@ function renderHeader(headers) {
       </div>
     </div>
   );
-
-  // return (
-  //   <div className="grid-header">
-  //     <div className="grid-row">
-  //       <div>Namespace</div>
-  //       <div>Name</div>
-  //       <div>Type</div>
-  //       <div>Duration</div>
-  //       <div>Start time</div>
-  //       <div>End time</div>
-  //       <div>User</div>
-  //       <div>Start method</div>
-  //       <div># Log errors</div>
-  //       <div># Log warnings</div>
-  //       <div># Records out</div>
-  //     </div>
-  //   </div>
-  // );
 }
 
 function renderBody(runs, headers) {
   return (
     <div className="grid-body">
       {
-        runs.map((runInfo, i) => {
-          let run = JSON.parse(runInfo);
-
+        runs.map((run, i) => {
           return (
             <div
               key={i}
               className="grid-row"
             >
+              <div>
+                {getName(run)}
+              </div>
+
+              <div>
+                {getType(run)}
+              </div>
+
               {
                 headers.map((head) => {
+                  let value = run[head];
+
+                  if (['start', 'end'].indexOf(head) !== -1) {
+                    value = humanReadableDate(value);
+                  }
+
                   return (
                     <div>
-                      {run[head]}
+                      {value || '--'}
                     </div>
                   );
                 })
@@ -110,50 +114,20 @@ function renderBody(runs, headers) {
       }
     </div>
   );
-
-
-
-  // return (
-  //   <div className="grid-body">
-  //     {
-  //       runs.map((runInfo, i) => {
-  //         let run = JSON.parse(runInfo);
-
-  //         return (
-  //           <div
-  //             key={i}
-  //             className="grid-row"
-  //           >
-  //             <div>{run.namespace}</div>
-  //             <div>{getName(run)}</div>
-  //             <div>{getType(run)}</div>
-  //             <div>{run.duration}</div>
-  //             <div>{humanReadableDate(run.start)}</div>
-  //             <div>{humanReadableDate(run.end)}</div>
-  //             <div>{run.user}</div>
-  //             <div>{run.startMethod}</div>
-  //             <div>{run.numLogErrors}</div>
-  //             <div>{run.numLogWarnings}</div>
-  //             <div>{run.numRecordsOut}</div>
-  //           </div>
-  //         );
-  //       })
-  //     }
-  //   </div>
-  // );
 }
 
-function getHeaders(runs) {
-  if (!runs.length) { return []; }
-  let headers = JSON.parse(runs[0]);
-  headers = Object.keys(headers);
+function getHeaders(request) {
+  if (!request.fields) { return []; }
+
+  let headers = difference(request.fields, DefaultSelection);
+
   return headers;
 }
 
-function RunsView({runs}) {
+function RunsView({runs, request}) {
   console.log('runs', runs);
 
-  let headers = getHeaders(runs);
+  let headers = getHeaders(request);
 
   return (
     <div className="reports-runs-container">
@@ -168,12 +142,14 @@ function RunsView({runs}) {
 }
 
 RunsView.propTypes = {
-  runs: PropTypes.array
+  runs: PropTypes.array,
+  request: PropTypes.object
 };
 
 const mapStateToProps = (state) => {
   return {
-    runs: state.details.runs
+    runs: state.details.runs,
+    request: state.details.request
   };
 };
 

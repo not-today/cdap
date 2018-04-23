@@ -19,6 +19,13 @@ import moment from 'moment';
 import {MyReportsApi} from 'api/reports';
 import orderBy from 'lodash/orderBy';
 
+export const DefaultSelection = [
+  'artifactName',
+  'applicationName',
+  'program',
+  'programType'
+];
+
 export function generateReport() {
   let date = moment().format('MM-DD-YYYY HH:mm:ss A');
 
@@ -28,40 +35,27 @@ export function generateReport() {
   let selections = ReportsStore.getState().customizer;
 
   // let defaultSelection = [
-  //   'applicationName',
-  //   'artifactName',
-  //   'program',
   //   'namespace',
+  //   // 'artifactScope',
+  //   'artifactName',
+  //   // 'artifactVersion',
+  //   'applicationName',
+  //   // 'applicationVersion',
+  //   'programType',
+  //   'program',
+  //   'run',
   //   'status',
   //   'start',
+  //   'running',
   //   'end',
   //   'duration',
-  //   'type'
+  //   'user',
+  //   'startMethod',
+  //   // 'runtimeArguments',
+  //   'numLogWarnings',
+  //   'numLogErrors',
+  //   'numRecordsOut'
   // ];
-
-  let defaultSelection = [
-    'namespace',
-    'artifactScope',
-    'artifactName',
-    'artifactVersion',
-    'applicationName',
-    // 'applicationVersion',
-    'programType',
-    'program',
-    'run',
-    'status',
-    'start',
-    'running',
-    'end',
-    'duration',
-    'user',
-    'startMethod',
-    // 'runtimeArguments',
-    'numLogWarnings',
-    'numLogErrors',
-    'numRecordsOut'
-  ];
-
 
   const FILTER_OUT = ['pipelines', 'customApps'];
 
@@ -69,7 +63,7 @@ export function generateReport() {
   // let pipelines = selections.pipelines;
   // let customApps = selections.customApps;
 
-  fields = defaultSelection.concat(fields);
+  fields = DefaultSelection.concat(fields);
 
   let requestBody = {
     name: `Successful ${date}`,
