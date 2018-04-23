@@ -39,23 +39,6 @@ class ReportsDetailView extends Component {
 
   componentWillMount() {
     this.fetchStatus();
-
-
-
-    // MyReportsApi.getReport(params)
-    //   .combineLatest(MyReportsApi.getDetails(params))
-    //   .subscribe(([info, reportDetail]) => {
-    //     ReportsStore.dispatch({
-    //       type: ReportsActions.setDetails,
-    //       payload: {
-    //         runs: reportDetail.details,
-    //         info
-    //       }
-    //     });
-
-    //     console.log('info', info);
-    //     console.log('detail', reportDetail);
-    //   });
   }
 
   fetchStatus = () => {

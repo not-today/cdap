@@ -26,6 +26,7 @@ import {getCurrentNamespace} from 'services/NamespaceStore';
 import {listReports} from 'components/Reports/store/ActionCreator';
 import {Observable} from 'rxjs/Observable';
 import classnames from 'classnames';
+import ActionPopover from 'components/Reports/ReportsList/ActionPopover';
 
 require('./ReportsList.scss');
 
@@ -84,7 +85,6 @@ class ReportsListView extends Component {
           <div>Report Name</div>
           <div>Created</div>
           <div>Expiration</div>
-          <div>Tags</div>
           <div></div>
         </div>
       </div>
@@ -114,9 +114,8 @@ class ReportsListView extends Component {
                 <div>
                   {this.renderExpiry(report)}
                 </div>
-                <div></div>
                 <div>
-                  <IconSVG name="icon-cog" />
+                  <ActionPopover report={report} />
                 </div>
               </Tag>
             );

@@ -19,6 +19,7 @@ import {defaultAction} from 'services/helpers';
 
 const ReportsActions = {
   toggleCustomizerOption: 'REPORTS_TOGGLE_CUSTOMIZER_OPTION',
+  setSelections: 'REPORTS_SET_SELECTIONS',
   setList: 'REPORTS_SET_LIST',
   setTimeRange: 'REPORTS_SET_TIME_RANGE',
   setRuns: 'REPORTS_SET_RUNS',
@@ -75,6 +76,11 @@ const customizer = (state = defaultCustomizerState, action = defaultAction) => {
         ...state,
         [action.payload.type]: !state[action.payload.type]
       };
+    case ReportsActions.setSelections:
+      return {
+        ...state,
+        ...action.payload.selections
+      };
     case ReportsActions.clearSelection:
     case ReportsActions.reset:
       return defaultCustomizerState;
@@ -91,6 +97,11 @@ const timeRange = (state = defaultTimeRangeState, action = defaultAction) => {
         selection: action.payload.selection,
         start: action.payload.start,
         end: action.payload.end
+      };
+    case ReportsActions.setSelections:
+      return {
+        ...state,
+        ...action.payload.timeRange
       };
     case ReportsActions.reset:
       return defaultTimeRangeState;

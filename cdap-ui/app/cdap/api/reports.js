@@ -29,6 +29,7 @@ export const MyReportsApi = {
   getDetails: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}/details`),
   getReport: apiCreator(dataSrc, 'GET', 'REQUEST', `${basepath}`),
   generateReport: apiCreator(dataSrc, 'POST', 'REQUEST', `${methodsPath}/reports`),
+  deleteReport: apiCreator(dataSrc, 'DELETE', 'REQUEST', basepath),
 
   // report service lifecycle
   getApp: apiCreator(dataSrc, 'GET', 'REQUEST', appPath),
