@@ -103,6 +103,7 @@ const timeRange = (state = defaultTimeRangeState, action = defaultAction) => {
         ...state,
         ...action.payload.timeRange
       };
+    case ReportsActions.clearSelection:
     case ReportsActions.reset:
       return defaultTimeRangeState;
     default:

@@ -20,12 +20,17 @@ import {connect} from 'react-redux';
 import {ReportsActions} from 'components/Reports/store/ReportsStore';
 import {generateReport} from 'components/Reports/store/ActionCreator';
 
-function ActionButtonsView({clearSelection}) {
+function ActionButtonsView({clearSelection, timeRange, customizer}) {
+  let disabled = (!timeRange.selection) ||
+                  (!customizer.pipelines && !customizer.customApps);
+
+
   return (
     <div className="action-buttons">
       <button
         className="btn btn-primary"
         onClick={generateReport}
+        disabled={disabled}
       >
         Generate Report
       </button>
@@ -41,7 +46,16 @@ function ActionButtonsView({clearSelection}) {
 }
 
 ActionButtonsView.propTypes = {
-  clearSelection: PropTypes.funct
+  clearSelection: PropTypes.func,
+  timeRange: PropTypes.object,
+  customizer: PropTypes.object
+};
+
+const mapStateToProps = (state) => {
+  return {
+    timeRange: state.timeRange,
+    customizer: state.customizer
+  };
 };
 
 const mapDispatch = (dispatch) => {
@@ -55,7 +69,7 @@ const mapDispatch = (dispatch) => {
 };
 
 const ActionButtons = connect(
-  null,
+  mapStateToProps,
   mapDispatch
 )(ActionButtonsView);
 

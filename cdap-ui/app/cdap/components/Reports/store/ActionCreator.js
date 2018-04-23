@@ -26,11 +26,44 @@ export const DefaultSelection = [
   'programType'
 ];
 
-export function generateReport() {
-  let date = moment().format('MM-DD-YYYY HH:mm:ss A');
+function getTimeRange() {
+  let state = ReportsStore.getState().timeRange;
 
-  let start = moment().subtract(30, 'm').format('x');
   let end = moment().format('x');
+  let start;
+
+  switch (state.selection) {
+    case 'last30':
+      start = moment().subtract(30, 'm').format('x');
+      break;
+    case 'lastHour':
+      start = moment().subtract(1, 'h').format('x');
+      break;
+    case 'custom':
+      start = state.start;
+      end = state.end;
+      break;
+  }
+
+  start = Math.round(parseInt(start, 10) / 1000);
+  end = Math.round(parseInt(end, 10) / 1000);
+
+  return {
+    start,
+    end
+  };
+}
+
+function getName(start, end) {
+  const format = 'MMM D, YYYY HH:mma';
+  let startDate = moment(start * 1000).format(format);
+  let endDate = moment(end * 1000).format(format);
+
+  return `Successful Runs - ${startDate} to ${endDate}`;
+}
+
+export function generateReport() {
+  let {start, end} = getTimeRange();
 
   let selections = ReportsStore.getState().customizer;
 
@@ -60,13 +93,10 @@ export function generateReport() {
   const FILTER_OUT = ['pipelines', 'customApps'];
 
   let fields = Object.keys(selections).filter(field => selections[field] && FILTER_OUT.indexOf(field) === -1);
-  // let pipelines = selections.pipelines;
-  // let customApps = selections.customApps;
-
   fields = DefaultSelection.concat(fields);
 
   let requestBody = {
-    name: `Successful ${date}`,
+    name: getName(start, end),
     start,
     end,
     fields
