@@ -15,7 +15,7 @@
  */
 
 import moment from 'moment';
-import uniqWith from 'lodash/uniqWith';
+import uniqBy from 'lodash/uniqBy';
 import isEqual from 'lodash/isEqual';
 
 const DAY_IN_SEC = 24 * 60 * 60;
@@ -43,17 +43,19 @@ export function parseDashboardData(rawData, startTime, duration, pipeline, custo
     let startTime = getBucket(runInfo.start * 1000);
     let endTime = getBucket(runInfo.end * 1000);
 
-    // add start method
-    if (runInfo.startMethod === 'manual') {
-      buckets[startTime].manual++;
-    } else {
-      buckets[startTime].schedule++;
-    }
-    buckets[startTime].runsList.push(runInfo);
+    if (buckets[startTime]) {
+      // add start method
+      if (runInfo.startMethod === 'manual') {
+        buckets[startTime].manual++;
+      } else {
+        buckets[startTime].schedule++;
+      }
+      buckets[startTime].runsList.push(runInfo);
 
-    // aggregate delay
-    let delay = runInfo.running - runInfo.start;
-    buckets[startTime].delay += delay;
+      // aggregate delay
+      let delay = runInfo.running - runInfo.start;
+      buckets[startTime].delay += delay;
+    }
 
     // add status
     if (endTime) {
@@ -66,14 +68,20 @@ export function parseDashboardData(rawData, startTime, duration, pipeline, custo
     }
 
     // if end time is not present, that means the program is still running
-    let end = runInfo.end || Date.now();
+    let end = runInfo.end * 1000 || Date.now();
+    let start = runInfo.start * 1000;
+
+    let startIndex = timeArray.indexOf(startTime);
+    // if startTime not found, then the program started before the graph
+    if (startIndex === -1) {
+      start = parseInt(timeArray[0], 10);
+    }
 
     // add running
-    let duration = end - runInfo.start;
+    let duration = end - start;
     duration = moment.duration(duration).asHours();
     duration = parseInt(duration, 10);
 
-    let startIndex = timeArray.indexOf(startTime);
     for (let i = 0; i < duration + 1; i++) {
       let time = timeArray[startIndex + i];
 
@@ -83,10 +91,8 @@ export function parseDashboardData(rawData, startTime, duration, pipeline, custo
     }
   });
 
-  // temporary deduping method
-  // once there is runId with the response this should not be needed.
   timeArray.forEach((time) => {
-    buckets[time].runsList = uniqWith(buckets[time].runsList, isEqual);
+    buckets[time].runsList = uniqBy(buckets[time].runsList, 'run');
   });
 
   let data = Object.keys(buckets).map((time) => {
