@@ -103,29 +103,6 @@ export function generateReport() {
 
   let selections = ReportsStore.getState().customizer;
 
-  // let defaultSelection = [
-  //   'namespace',
-  //   // 'artifactScope',
-  //   'artifactName',
-  //   // 'artifactVersion',
-  //   'applicationName',
-  //   // 'applicationVersion',
-  //   'programType',
-  //   'program',
-  //   'run',
-  //   'status',
-  //   'start',
-  //   'running',
-  //   'end',
-  //   'duration',
-  //   'user',
-  //   'startMethod',
-  //   // 'runtimeArguments',
-  //   'numLogWarnings',
-  //   'numLogErrors',
-  //   'numRecordsOut'
-  // ];
-
   const FILTER_OUT = ['pipelines', 'customApps'];
 
   let fields = Object.keys(selections).filter(field => selections[field] && FILTER_OUT.indexOf(field) === -1);
