@@ -138,6 +138,23 @@ function humanReadableDuration(timeInSeconds) {
     return `${months} ${pluralize(months, 'month')} ${humanReadableDuration(timeInSeconds - (ONE_MONTH_SECONDS * months))}`;
   }
 }
+
+// Will format duration in the form of HH:mm:ss
+function formatDuration(timeInSeconds) {
+  let duration = moment.duration(timeInSeconds, 'seconds');
+
+  let hours = Math.floor(duration.asHours());
+  let minutes = duration.minutes();
+  let seconds = duration.seconds();
+
+  hours = hours < 10 ? `0${hours}` : hours;
+  minutes = minutes < 10 ? `0${minutes}` : minutes;
+  seconds = seconds < 10 ? `0${seconds}` : seconds;
+
+  return `${hours}:${minutes}:${seconds}`;
+}
+
+
 function contructUrl ({path}) {
   return [
     window.CDAP_CONFIG.sslEnabled? 'https://': 'http://',
@@ -364,5 +381,6 @@ export {
   wholeArrayIsNumeric,
   reverseArrayWithoutMutating,
   convertMapToKeyValuePairs,
-  convertKeyValuePairsToMap
+  convertKeyValuePairsToMap,
+  formatDuration
 };

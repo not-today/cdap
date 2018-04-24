@@ -40,7 +40,7 @@ const defaultCustomizerState = {
   duration: false,
   user: false,
   startMethod: false,
-  runtimeArguments: false,
+  runtimeArgs: false,
   numLogWarnings: false,
   numLogErrors: false,
   numRecordsOut: false
