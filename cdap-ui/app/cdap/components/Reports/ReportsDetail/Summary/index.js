@@ -90,7 +90,7 @@ function renderStartMethod(summary) {
   if (!summary.startMethods) { return null; }
   const labelMap = {
     MANUAL: 'manually',
-    TIME: 'by schedule',
+    SCHEDULED: 'by schedule',
     PROGRAM_STATUS: 'by trigger'
   };
 

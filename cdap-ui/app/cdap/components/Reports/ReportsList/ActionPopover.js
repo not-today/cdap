@@ -60,8 +60,8 @@ export default class ActionPopover extends Component {
 
         let timeRange = {
           selection: 'custom',
-          start: request.start,
-          end: request.end
+          start: request.start * 1000,
+          end: request.end * 1000
         };
 
         let payload = {

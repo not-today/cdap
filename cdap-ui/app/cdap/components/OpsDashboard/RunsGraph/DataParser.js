@@ -57,7 +57,7 @@ export function parseDashboardData(rawData, startTime, duration, pipeline, custo
     }
 
     // add status
-    if (endTime) {
+    if (endTime && buckets[endTime]) {
       if (runInfo.status === 'COMPLETED') {
         buckets[endTime].successful++;
       } else if (runInfo.status === 'FAILED') {
@@ -74,6 +74,12 @@ export function parseDashboardData(rawData, startTime, duration, pipeline, custo
     // if startTime not found, then the program started before the graph
     if (startIndex === -1) {
       start = parseInt(timeArray[0], 10);
+    }
+
+    let endIndex = timeArray.indexOf(endTime);
+    // if endTime not found, then the program end after the graph
+    if (endIndex === -1) {
+      end = Date.now();
     }
 
     // add running
