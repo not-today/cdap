@@ -16,7 +16,10 @@
 
 package co.cask.cdap.internal.app.runtime.monitor;
 
+import co.cask.cdap.api.Transactional;
+import co.cask.cdap.api.Transactionals;
 import co.cask.cdap.api.common.Bytes;
+import co.cask.cdap.api.data.DatasetContext;
 import co.cask.cdap.api.messaging.MessagePublisher;
 import co.cask.cdap.client.config.ClientConfig;
 import co.cask.cdap.client.util.RESTClient;
@@ -26,6 +29,11 @@ import co.cask.cdap.common.logging.LogSamplers;
 import co.cask.cdap.common.logging.Loggers;
 import co.cask.cdap.common.service.Retries;
 import co.cask.cdap.common.service.RetryStrategies;
+import co.cask.cdap.data.dataset.SystemDatasetInstantiator;
+import co.cask.cdap.data2.dataset2.DatasetFramework;
+import co.cask.cdap.data2.dataset2.MultiThreadDatasetCache;
+import co.cask.cdap.data2.transaction.TransactionSystemClientAdapter;
+import co.cask.cdap.data2.transaction.Transactions;
 import co.cask.cdap.internal.app.runtime.ProgramOptionConstants;
 import co.cask.cdap.messaging.MessagingService;
 import co.cask.cdap.messaging.context.MultiThreadMessagingContext;
@@ -40,6 +48,8 @@ import co.cask.common.http.HttpResponse;
 import com.google.common.reflect.TypeToken;
 import com.google.common.util.concurrent.AbstractExecutionThreadService;
 import com.google.gson.Gson;
+import org.apache.tephra.TransactionFailureException;
+import org.apache.tephra.TransactionSystemClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,6 +58,7 @@ import java.net.ConnectException;
 import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -57,12 +68,12 @@ import java.util.concurrent.TimeUnit;
 import javax.ws.rs.ServiceUnavailableException;
 
 /**
- * Runtime Monitor Runnable responsible for fetching metadata
+ * Runtime Monitor Service responsible for fetching program status, audit messages, metrics, data events and metadata
  */
 public class RuntimeMonitor extends AbstractExecutionThreadService {
   private static final Logger LOG = LoggerFactory.getLogger(RuntimeMonitor.class);
   // For outage, only log once per 60 seconds per message.
-  private static final Logger OUTAGE_LOG =  Loggers.sampling(LOG, LogSamplers.perMessage(
+  private static final Logger OUTAGE_LOG = Loggers.sampling(LOG, LogSamplers.perMessage(
     () -> LogSamplers.limitRate(60000)));
 
   private static final Gson GSON = new Gson();
@@ -82,12 +93,16 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   private final long pollTimeMillis;
   private final long gracefulShutdownMillis;
   private final List<MonitorMessage> lastProgramStateMessages;
+  private final DatasetFramework dsFramework;
+  private final Transactional transactional;
   private volatile Thread runThread;
   private volatile boolean stopped;
+  private volatile boolean killed;
   private long programFinishTime;
 
   public RuntimeMonitor(ProgramRunId programRunId, CConfiguration cConf,
-                        MessagingService messagingService, ClientConfig clientConfig) {
+                        MessagingService messagingService, ClientConfig clientConfig,
+                        DatasetFramework datasetFramework, TransactionSystemClient txClient) {
     this.programRunId = programRunId;
     this.cConf = cConf;
     this.messagePublisher = new MultiThreadMessagingContext(messagingService).getMessagePublisher();
@@ -98,6 +113,13 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
     this.gracefulShutdownMillis = cConf.getLong(Constants.RuntimeMonitor.GRACEFUL_SHUTDOWN_MS);
     this.topicsToRequest = new HashMap<>();
     this.requestKeyToLocalTopic = new HashMap<>();
+    this.dsFramework = datasetFramework;
+    this.transactional = Transactions.createTransactionalWithRetry(
+      Transactions.createTransactional(new MultiThreadDatasetCache(
+        new SystemDatasetInstantiator(datasetFramework), new TransactionSystemClientAdapter(txClient),
+        NamespaceId.SYSTEM, Collections.emptyMap(), null, null)),
+      org.apache.tephra.RetryStrategies.retryOnConflict(20, 100)
+    );
     this.programFinishTime = -1L;
     this.lastProgramStateMessages = new ArrayList<>();
   }
@@ -105,11 +127,19 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   @Override
   protected void startUp() throws Exception {
     LOG.debug("Starting runtime monitor for program run {}.", programRunId);
-    // TODO initialize from offset table for a given programId
+
+    Set<String> topicConfigs = getTopicConfigs();
     for (String topicConfig : getTopicConfigs()) {
-      topicsToRequest.put(topicConfig, new MonitorConsumeRequest(null, limit));
       requestKeyToLocalTopic.put(topicConfig, getTopic(topicConfig));
     }
+
+    callWithRetries((Retries.Callable<Void, TransactionFailureException>) () -> {
+      Transactionals.execute(transactional, context -> {
+        OffsetManagementUtil.initializeOffsets(cConf, dsFramework, context, topicsToRequest, programRunId.getRun(),
+                                               topicConfigs);
+      });
+      return null;
+    });
   }
 
   @Override
@@ -123,6 +153,19 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
     if (runThread != null) {
       runThread.interrupt();
     }
+  }
+
+  /**
+   * Kills the runtime and runtime monitor
+   */
+  public void kill() {
+    killed = true;
+    stop();
+  }
+
+  @Override
+  protected String getServiceName() {
+    return "runtime-monitor-" + programRunId.getRun();
   }
 
   private Set<String> getTopicConfigs() {
@@ -166,7 +209,7 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
     boolean shutdownRemoteRuntime = false;
 
     try {
-      while (!stopped) {
+      while (!stopped && !killed) {
         try {
           // First check if we should trigger the remote service to shutdown and also shutting down this monitor.
           // If the triggerRuntimeShutdown() call failed, we'll stay in this loop for the retry.
@@ -207,6 +250,8 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
           }
 
           Thread.sleep(pollTimeMillis);
+        } catch (InterruptedException e) {
+          // Interruption means stopping the service.
         } catch (Exception e) {
           if (programFinishTime < 0) {
             // TODO: CDAP-13343 Shouldn't just loop infinitely.
@@ -225,19 +270,21 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
     // Clear the interrupt flag
     Thread.interrupted();
 
-    if (stopped) {
+    if (killed) {
       // TODO: Kill the remote program execute on explicit stop on this monitor
     }
 
-    // Publish the remaining program state messages. We should retry indefinitely
-    String topicConfig = Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC;
-    String topic = requestKeyToLocalTopic.get(topicConfig);
-    try {
-      Retries.callWithRetries(() -> publish(topicConfig, topic, lastProgramStateMessages),
-                              RetryStrategies.fixDelay(1, TimeUnit.SECONDS), Retries.ALWAYS_TRUE);
-    } catch (Exception e) {
-      // This shouldn't happen since we have infinite retry.
-      LOG.error("Failed to publish remaining program state messages for program run {}", programRunId, e);
+    if (lastProgramStateMessages.size() > 0) {
+      // Publish the remaining program state messages. We should retry indefinitely
+      String topicConfig = Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC;
+      String topic = requestKeyToLocalTopic.get(topicConfig);
+
+      callWithRetries((Retries.Callable<Long, TransactionFailureException>) () -> {
+        Transactionals.execute(transactional, context -> {
+          return publish(topicConfig, topic, lastProgramStateMessages, context);
+        });
+        return null;
+      });
     }
   }
 
@@ -265,7 +312,7 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
 
         if (programFinishTime >= 0) {
           // Buffer the program state messages and don't publish them until the end
-          // Otherwise, once we publish, the deprovisioner will kicks in and deleting the cluster
+          // Otherwise, once we publish, the deprovisioner will kick in and delete the cluster
           // which could result in losing the last set of messages for some topics.
           lastProgramStateMessages.addAll(monitorMessages);
           // We still update the in memory store for the next fetch offset to avoid fetching duplicate
@@ -276,24 +323,32 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
         }
       }
 
-      String topic = requestKeyToLocalTopic.get(topicConfig);
-      latestPublishTime = Math.max(publish(topicConfig, topic, monitorMessages), latestPublishTime);
+      Long publishTime = callWithRetries((Retries.Callable<Long, TransactionFailureException>) () -> {
+        Transactionals.execute(transactional, context -> {
+          return publish(topicConfig, requestKeyToLocalTopic.get(topicConfig), monitorMessages, context);
+        });
+        return null;
+      });
+
+      latestPublishTime = publishTime == null ? latestPublishTime : Math.max(publishTime, latestPublishTime);
     }
+
     return latestPublishTime;
   }
 
   /**
-   * Publish the given set of messages to the local TMS.
+   * Transactionally publish the given set of messages to the local TMS.
    *
    * @return the latest message publish time or {@code -1L} if there is no message to process
    */
-  private long publish(String topicConfig, String topic, List<MonitorMessage> messages) throws Exception {
-    // TODO publish messages transactionally along with offset table updates
+  private long publish(String topicConfig, String topic, List<MonitorMessage> messages, DatasetContext context)
+    throws Exception {
     messagePublisher.publish(NamespaceId.SYSTEM.getNamespace(), topic,
-                             messages.stream().map(s -> s.getMessage().getBytes(StandardCharsets.UTF_8)).iterator());
-
+                             messages.stream().map(s -> s.getMessage().getBytes(StandardCharsets.UTF_8))
+                               .iterator());
     MonitorMessage lastMessage = updateTopicToRequest(topicConfig, messages);
-
+    OffsetManagementUtil.persistOffsets(cConf, dsFramework, context, programRunId.getRun(), topicConfig,
+                                        lastMessage.getMessageId());
     // Messages are ordered by publish time, hence we can get the latest publish time by getting the publish time
     // from the last message.
     return getMessagePublishTime(lastMessage);
@@ -318,6 +373,14 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
       LOG.trace("Connection refused when attempting to connect to Runtime Http Server. " +
                   "Assuming that it is not available.");
     }
+
+    // clean up offsets once remote runtime shutdown is triggered
+    callWithRetries((Retries.Callable<Void, TransactionFailureException>) () -> {
+      Transactionals.execute(transactional, context -> {
+        OffsetManagementUtil.cleanupOffsets(cConf, dsFramework, context, programRunId.getRun());
+      });
+      return null;
+    });
   }
 
   /**
@@ -368,5 +431,15 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   private String getTopic(String topicConfig) {
     int idx = topicConfig.lastIndexOf(':');
     return idx < 0 ? cConf.get(topicConfig) : cConf.get(topicConfig.substring(0, idx)) + topicConfig.substring(idx + 1);
+  }
+
+  private <V, E extends Exception> V callWithRetries(Retries.Callable<V, E> callable) {
+    try {
+      return Retries.callWithRetries(callable, RetryStrategies.fixDelay(1, TimeUnit.SECONDS), Retries.ALWAYS_TRUE);
+    } catch (Exception e) {
+      // This shouldn't happen since we have infinite retry.
+      LOG.error("Failed to publish remaining program state messages for program run {}", programRunId, e);
+    }
+    return null;
   }
 }

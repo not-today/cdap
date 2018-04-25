@@ -29,6 +29,8 @@ import co.cask.cdap.common.app.RunIds;
 import co.cask.cdap.common.conf.CConfiguration;
 import co.cask.cdap.common.conf.Constants;
 import co.cask.cdap.common.utils.Tasks;
+import co.cask.cdap.data2.datafabric.dataset.service.DatasetService;
+import co.cask.cdap.data2.dataset2.DatasetFramework;
 import co.cask.cdap.internal.app.program.MessagingProgramStateWriter;
 import co.cask.cdap.internal.app.runtime.SimpleProgramOptions;
 import co.cask.cdap.internal.app.runtime.monitor.RuntimeMonitor;
@@ -43,6 +45,9 @@ import co.cask.cdap.proto.id.TopicId;
 import com.google.common.util.concurrent.Service;
 import com.google.inject.Guice;
 import com.google.inject.Injector;
+import org.apache.tephra.TransactionManager;
+import org.apache.tephra.TransactionSystemClient;
+import org.apache.twill.api.RunId;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.ClassRule;
@@ -62,6 +67,10 @@ public class RuntimeMonitorTest {
   private static MessagingService messagingService;
   private RuntimeMonitorServer runtimeServer;
   private MessagingContext messagingContext;
+  private TransactionManager txManager;
+  private TransactionSystemClient transactionSystemClient;
+  private DatasetService datasetService;
+  private DatasetFramework datasetFramework;
 
   @ClassRule
   public static final TemporaryFolder TMP_FOLDER = new TemporaryFolder();
@@ -88,6 +97,14 @@ public class RuntimeMonitorTest {
     messagingService.createTopic(new TopicMetadata(new TopicId("system", "cdap-programStatus")));
     messagingContext = new MultiThreadMessagingContext(messagingService);
 
+    txManager = injector.getInstance(TransactionManager.class);
+    txManager.startAndWait();
+    transactionSystemClient = injector.getInstance(TransactionSystemClient.class);
+
+    datasetService = injector.getInstance(DatasetService.class);
+    datasetService.startAndWait();
+    datasetFramework = injector.getInstance(DatasetFramework.class);
+
     runtimeServer = injector.getInstance(RuntimeMonitorServer.class);
     runtimeServer.startAndWait();
   }
@@ -97,15 +114,18 @@ public class RuntimeMonitorTest {
     if (messagingService instanceof Service) {
       ((Service) messagingService).stopAndWait();
     }
+
+    txManager.stopAndWait();
+    datasetService.stopAndWait();
     runtimeServer.stopAndWait();
   }
 
   @Test
   public void testRunTimeMonitor() throws Exception {
-    ProgramRunId programRunId = NamespaceId.DEFAULT.app("app1").workflow("myworkflow").run(RunIds.generate());
-
+    RunId runId = RunIds.generate();
+    ProgramRunId programRunId = NamespaceId.DEFAULT.app("app1").workflow("myworkflow").run(runId);
     publishProgramStatus(programRunId);
-    verifyPublishedMessages(3, cConf);
+    verifyPublishedMessages(2, cConf, 2, null);
 
     ConnectionConfig connectionConfig = ConnectionConfig.builder()
       .setHostname(runtimeServer.getBindAddress().getAddress().getHostAddress())
@@ -123,11 +143,29 @@ public class RuntimeMonitorTest {
     cConfCopy.set(Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC, "cdap-programStatus");
 
     RuntimeMonitor runtimeMonitor = new RuntimeMonitor(programRunId,
-                                                       cConfCopy, messagingService, clientConfigBuilder.build());
+                                                       cConfCopy, messagingService, clientConfigBuilder.build(),
+                                                       datasetFramework, transactionSystemClient);
 
     runtimeMonitor.startAndWait();
     // use different configuration for verification
-    verifyPublishedMessages(2, cConfCopy);
+    String lastProcessed = verifyPublishedMessages(2, cConfCopy, 2, null);
+    runtimeMonitor.stopAndWait();
+
+    // publish some more messages to test offset manager
+    publishProgramStatus(programRunId);
+    verifyPublishedMessages(2, cConf, 2, lastProcessed);
+
+    runtimeMonitor = new RuntimeMonitor(programRunId, cConfCopy, messagingService, clientConfigBuilder.build(),
+                                        datasetFramework, transactionSystemClient);
+    runtimeMonitor.startAndWait();
+    // use different configuration for verification
+    lastProcessed = verifyPublishedMessages(2, cConfCopy, 2, lastProcessed);
+
+    // publish completed status to trigger offset clean up
+    publishCompletedStatus(programRunId);
+
+    // use different configuration for verification
+    verifyPublishedMessages(2, cConfCopy, 1, lastProcessed);
 
     // wait for runtime server to stop automatically
     Tasks.waitFor(true, () -> !runtimeServer.isRunning(), 5, TimeUnit.MINUTES);
@@ -135,9 +173,11 @@ public class RuntimeMonitorTest {
     runtimeMonitor.stopAndWait();
   }
 
-  private void verifyPublishedMessages(int limit, CConfiguration cConfig) throws Exception {
+  private String verifyPublishedMessages(int limit, CConfiguration cConfig, int expectedCount, final String messageId)
+    throws Exception {
     MessageFetcher fetcher = messagingContext.getMessageFetcher();
-    final String[] messageId = {null};
+    final String[] lastProcessed = {null};
+
     Tasks.waitFor(true, new Callable<Boolean>() {
       int count = 0;
 
@@ -145,24 +185,29 @@ public class RuntimeMonitorTest {
       public Boolean call() throws Exception {
         try (CloseableIterator<Message> iter =
                fetcher.fetch(NamespaceId.SYSTEM.getNamespace(),
-                             cConfig.get(Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC), limit, messageId[0])) {
+                             cConfig.get(Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC), limit, messageId)) {
           while (iter.hasNext()) {
             Message message = iter.next();
-            messageId[0] = message.getId();
+            lastProcessed[0] = message.getId();
             count++;
           }
         }
 
-        return count >= 3;
+        return count == expectedCount;
       }
     }, 5, TimeUnit.MINUTES);
+
+    return lastProcessed[0];
   }
 
   private void publishProgramStatus(ProgramRunId programRunId) {
     ProgramStateWriter programStateWriter = new MessagingProgramStateWriter(cConf, messagingService);
-
     programStateWriter.start(programRunId, new SimpleProgramOptions(programRunId.getParent()), null, null);
     programStateWriter.running(programRunId, null);
+  }
+
+  private void publishCompletedStatus(ProgramRunId programRunId) {
+    ProgramStateWriter programStateWriter = new MessagingProgramStateWriter(cConf, messagingService);
     programStateWriter.completed(programRunId);
   }
 }
