@@ -1426,7 +1426,7 @@ public class AppMetadataStore extends MetadataStoreDataset {
       keyBuilder.add(subscriber);
     }
 
-    deleteAll(keyBuilder.build());
+    delete(keyBuilder.build());
   }
 
   private Iterable<RunId> getRunningInRangeForStatus(String statusKey, final long startTimeInSecs,

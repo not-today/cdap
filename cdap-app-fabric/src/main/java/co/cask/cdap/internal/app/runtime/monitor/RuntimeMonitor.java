@@ -21,6 +21,8 @@ import co.cask.cdap.api.Transactionals;
 import co.cask.cdap.api.common.Bytes;
 import co.cask.cdap.api.data.DatasetContext;
 import co.cask.cdap.api.messaging.MessagePublisher;
+import co.cask.cdap.api.retry.RetriesExhaustedException;
+import co.cask.cdap.api.retry.RetryableException;
 import co.cask.cdap.client.config.ClientConfig;
 import co.cask.cdap.client.util.RESTClient;
 import co.cask.cdap.common.conf.CConfiguration;
@@ -29,12 +31,14 @@ import co.cask.cdap.common.logging.LogSamplers;
 import co.cask.cdap.common.logging.Loggers;
 import co.cask.cdap.common.service.Retries;
 import co.cask.cdap.common.service.RetryStrategies;
+import co.cask.cdap.common.service.RetryStrategy;
 import co.cask.cdap.data.dataset.SystemDatasetInstantiator;
 import co.cask.cdap.data2.dataset2.DatasetFramework;
 import co.cask.cdap.data2.dataset2.MultiThreadDatasetCache;
 import co.cask.cdap.data2.transaction.TransactionSystemClientAdapter;
 import co.cask.cdap.data2.transaction.Transactions;
 import co.cask.cdap.internal.app.runtime.ProgramOptionConstants;
+import co.cask.cdap.internal.app.store.AppMetadataStore;
 import co.cask.cdap.messaging.MessagingService;
 import co.cask.cdap.messaging.context.MultiThreadMessagingContext;
 import co.cask.cdap.messaging.data.MessageId;
@@ -95,6 +99,7 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   private final List<MonitorMessage> lastProgramStateMessages;
   private final DatasetFramework dsFramework;
   private final Transactional transactional;
+  private final RetryStrategy retryStrategy;
   private volatile Thread runThread;
   private volatile boolean stopped;
   private volatile boolean killed;
@@ -122,6 +127,7 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
     );
     this.programFinishTime = -1L;
     this.lastProgramStateMessages = new ArrayList<>();
+    this.retryStrategy = RetryStrategies.fixDelay(1, TimeUnit.SECONDS);
   }
 
   @Override
@@ -129,17 +135,21 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
     LOG.debug("Starting runtime monitor for program run {}.", programRunId);
 
     Set<String> topicConfigs = getTopicConfigs();
-    for (String topicConfig : getTopicConfigs()) {
+    for (String topicConfig : topicConfigs) {
       requestKeyToLocalTopic.put(topicConfig, getTopic(topicConfig));
     }
 
     callWithRetries((Retries.Callable<Void, TransactionFailureException>) () -> {
       Transactionals.execute(transactional, context -> {
-        OffsetManagementUtil.initializeOffsets(cConf, dsFramework, context, topicsToRequest, programRunId.getRun(),
-                                               topicConfigs);
+        for (String topicConfig : topicConfigs) {
+          String messageId = AppMetadataStore.create(cConf, context, dsFramework)
+            .retrieveSubscriberState(topicConfig, programRunId.getRun());
+          topicsToRequest.put(topicConfig, new MonitorConsumeRequest(messageId, limit));
+        }
       });
+
       return null;
-    });
+    }, false);
   }
 
   @Override
@@ -274,17 +284,27 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
       // TODO: Kill the remote program execute on explicit stop on this monitor
     }
 
-    if (lastProgramStateMessages.size() > 0) {
+    if (lastProgramStateMessages.isEmpty()) {
       // Publish the remaining program state messages. We should retry indefinitely
       String topicConfig = Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC;
       String topic = requestKeyToLocalTopic.get(topicConfig);
 
-      callWithRetries((Retries.Callable<Long, TransactionFailureException>) () -> {
-        Transactionals.execute(transactional, context -> {
-          return publish(topicConfig, topic, lastProgramStateMessages, context);
-        });
-        return null;
-      });
+      try {
+        callWithRetries((Retries.Callable<Void, TransactionFailureException>) () -> {
+          Transactionals.execute(transactional, context -> {
+            publish(topicConfig, topic, lastProgramStateMessages, context);
+
+            // cleanup all the offsets after publishing terminal states.
+            for (String topicConf : requestKeyToLocalTopic.keySet()) {
+              AppMetadataStore.create(cConf, context, dsFramework).deleteSubscriberState(topicConf,
+                                                                                         programRunId.getRun());
+            }
+          });
+          return null;
+        }, true);
+      } catch (TransactionFailureException e) {
+        throw new RetryableException(e);
+      }
     }
   }
 
@@ -328,7 +348,7 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
           return publish(topicConfig, requestKeyToLocalTopic.get(topicConfig), monitorMessages, context);
         });
         return null;
-      });
+      }, false);
 
       latestPublishTime = publishTime == null ? latestPublishTime : Math.max(publishTime, latestPublishTime);
     }
@@ -347,8 +367,8 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
                              messages.stream().map(s -> s.getMessage().getBytes(StandardCharsets.UTF_8))
                                .iterator());
     MonitorMessage lastMessage = updateTopicToRequest(topicConfig, messages);
-    OffsetManagementUtil.persistOffsets(cConf, dsFramework, context, programRunId.getRun(), topicConfig,
-                                        lastMessage.getMessageId());
+    AppMetadataStore.create(cConf, context, dsFramework).persistSubscriberState(topicConfig, programRunId.getRun(),
+                                                                                lastMessage.getMessageId());
     // Messages are ordered by publish time, hence we can get the latest publish time by getting the publish time
     // from the last message.
     return getMessagePublishTime(lastMessage);
@@ -373,14 +393,6 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
       LOG.trace("Connection refused when attempting to connect to Runtime Http Server. " +
                   "Assuming that it is not available.");
     }
-
-    // clean up offsets once remote runtime shutdown is triggered
-    callWithRetries((Retries.Callable<Void, TransactionFailureException>) () -> {
-      Transactionals.execute(transactional, context -> {
-        OffsetManagementUtil.cleanupOffsets(cConf, dsFramework, context, programRunId.getRun());
-      });
-      return null;
-    });
   }
 
   /**
@@ -433,13 +445,50 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
     return idx < 0 ? cConf.get(topicConfig) : cConf.get(topicConfig.substring(0, idx)) + topicConfig.substring(idx + 1);
   }
 
-  private <V, E extends Exception> V callWithRetries(Retries.Callable<V, E> callable) {
-    try {
-      return Retries.callWithRetries(callable, RetryStrategies.fixDelay(1, TimeUnit.SECONDS), Retries.ALWAYS_TRUE);
-    } catch (Exception e) {
-      // This shouldn't happen since we have infinite retry.
-      LOG.error("Failed to publish remaining program state messages for program run {}", programRunId, e);
+  private <V, T extends Throwable> V callWithRetries(Retries.Callable<V, T> callable, boolean retryIndefinitely)
+    throws T {
+
+    int failures = 0;
+    long startTime = System.currentTimeMillis();
+    while (true) {
+      try {
+        V v = callable.call();
+        if (failures > 0) {
+          LOG.trace("Retry succeeded after {} retries and {} ms.", failures, System.currentTimeMillis() - startTime);
+        }
+        return v;
+      } catch (Throwable t) {
+        if (!(t instanceof RetryableException)) {
+          throw t;
+        }
+
+        long retryTime = getRetryStrategy(retryIndefinitely).nextRetry(++failures, startTime);
+        if (retryTime < 0) {
+          String errMsg = String.format("Retries exhausted after %d failures and %d ms.",
+                                        failures, System.currentTimeMillis() - startTime);
+          LOG.debug(errMsg);
+          t.addSuppressed(new RetriesExhaustedException(errMsg));
+          throw t;
+        }
+
+        LOG.trace("Call failed, retrying again after {} ms.", retryTime, t);
+        try {
+          TimeUnit.MILLISECONDS.sleep(retryTime);
+        } catch (InterruptedException e) {
+          // if we were interrupted while waiting for the next retry, treat it like no retries were attempted
+          t.addSuppressed(e);
+          Thread.currentThread().interrupt();
+          throw t;
+        }
+      }
     }
-    return null;
+  }
+
+  private RetryStrategy getRetryStrategy(boolean retryIndefinitely) {
+    if (isRunning() || retryIndefinitely) {
+      return retryStrategy;
+    }
+    // If failure happen during shutdown, use a retry strategy that only retry fixed number of times
+    return RetryStrategies.timeLimit(5, TimeUnit.SECONDS, RetryStrategies.fixDelay(200, TimeUnit.MILLISECONDS));
   }
 }
