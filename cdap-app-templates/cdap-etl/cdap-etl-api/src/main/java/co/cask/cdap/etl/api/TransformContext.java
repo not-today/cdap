@@ -17,11 +17,13 @@
 package co.cask.cdap.etl.api;
 
 import co.cask.cdap.api.annotation.Beta;
+import co.cask.cdap.api.metadata.MetadataReaderContext;
+import co.cask.cdap.api.metadata.MetadataWriterContext;
 
 /**
  * Context passed to ETL Transform stages.
  */
 @Beta
-public interface TransformContext extends StageContext, LookupProvider {
+public interface TransformContext extends StageContext, LookupProvider, MetadataReaderContext, MetadataWriterContext {
 
 }
