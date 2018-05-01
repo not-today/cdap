@@ -17,6 +17,7 @@
 package co.cask.cdap.internal.provision;
 
 import co.cask.cdap.app.program.ProgramDescriptor;
+import co.cask.cdap.app.runtime.ProgramOptions;
 import co.cask.cdap.proto.id.ProgramRunId;
 import co.cask.cdap.runtime.spi.provisioner.Cluster;
 
@@ -24,24 +25,27 @@ import java.util.Map;
 import javax.annotation.Nullable;
 
 /**
- * Information about a cluster for a program run.
+ * Information about a provisioning task for a program run.
  */
-public class ClusterInfo {
+public class ProvisioningTaskInfo {
   private final ClusterOp op;
   private final ProgramRunId programRunId;
   private final ProgramDescriptor programDescriptor;
+  private final ProgramOptions programOptions;
   private final Map<String, String> provisionerProperties;
   private final String user;
   private final String provisionerName;
   private final SSHKeyInfo sshKeyInfo;
   private final Cluster cluster;
 
-  public ClusterInfo(ProgramRunId programRunId, ProgramDescriptor programDescriptor,
-                     Map<String, String> provisionerProperties, String provisionerName, String user,
-                     ClusterOp op, @Nullable SSHKeyInfo sshKeyInfo, @Nullable Cluster cluster) {
+  public ProvisioningTaskInfo(ProgramRunId programRunId, ProgramDescriptor programDescriptor,
+                              ProgramOptions programOptions, Map<String, String> provisionerProperties,
+                              String provisionerName, String user, ClusterOp op,
+                              @Nullable SSHKeyInfo sshKeyInfo, @Nullable Cluster cluster) {
     this.programRunId = programRunId;
     this.provisionerProperties = provisionerProperties;
     this.programDescriptor = programDescriptor;
+    this.programOptions = programOptions;
     this.user = user;
     this.provisionerName = provisionerName;
     this.op = op;
@@ -49,9 +53,14 @@ public class ClusterInfo {
     this.cluster = cluster;
   }
 
-  public ClusterInfo(ClusterInfo existing, ClusterOp op, @Nullable Cluster cluster) {
-    this(existing.getProgramRunId(), existing.getProgramDescriptor(), existing.getProvisionerProperties(),
-         existing.getProvisionerName(), existing.getUser(), op, existing.getSshKeyInfo(), cluster);
+  public ProvisioningTaskInfo(ProvisioningTaskInfo existing, ClusterOp op, @Nullable Cluster cluster) {
+    this(existing.getProgramRunId(), existing.getProgramDescriptor(), existing.getProgramOptions(),
+         existing.getProvisionerProperties(), existing.getProvisionerName(), existing.getUser(), op,
+         existing.getSshKeyInfo(), cluster);
+  }
+
+  public ProvisioningTaskKey getTaskKey() {
+    return new ProvisioningTaskKey(programRunId, op.getType());
   }
 
   public ProgramRunId getProgramRunId() {
@@ -60,6 +69,10 @@ public class ClusterInfo {
 
   public ProgramDescriptor getProgramDescriptor() {
     return programDescriptor;
+  }
+
+  public ProgramOptions getProgramOptions() {
+    return programOptions;
   }
 
   public Map<String, String> getProvisionerProperties() {

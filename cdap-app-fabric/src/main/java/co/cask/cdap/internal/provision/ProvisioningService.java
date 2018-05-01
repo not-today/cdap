@@ -17,9 +17,11 @@
 package co.cask.cdap.internal.provision;
 
 import co.cask.cdap.api.Transactional;
+import co.cask.cdap.api.Transactionals;
 import co.cask.cdap.api.data.DatasetContext;
 import co.cask.cdap.app.runtime.ProgramOptions;
 import co.cask.cdap.common.NotFoundException;
+import co.cask.cdap.common.async.KeyedExecutor;
 import co.cask.cdap.common.conf.CConfiguration;
 import co.cask.cdap.data.dataset.SystemDatasetInstantiator;
 import co.cask.cdap.data2.dataset2.DatasetFramework;
@@ -36,6 +38,7 @@ import co.cask.cdap.runtime.spi.provisioner.Provisioner;
 import co.cask.cdap.runtime.spi.provisioner.ProvisionerContext;
 import co.cask.cdap.runtime.spi.provisioner.ProvisionerSpecification;
 import co.cask.cdap.runtime.spi.ssh.SSHContext;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.AbstractIdleService;
 import com.google.inject.Inject;
 import com.jcraft.jsch.JSch;
@@ -57,11 +60,14 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
 /**
@@ -77,7 +83,9 @@ public class ProvisioningService extends AbstractIdleService {
   private final DatasetFramework datasetFramework;
   private final Transactional transactional;
   private final SparkCompat sparkCompat;
+  private final Consumer<ProvisioningTaskKey> taskStateCleanup;
   private ExecutorService executorService;
+  private KeyedExecutor<ProvisioningTaskKey> taskExecutor;
 
   @Inject
   ProvisioningService(CConfiguration cConf, ProvisionerProvider provisionerProvider,
@@ -98,15 +106,19 @@ public class ProvisioningService extends AbstractIdleService {
       RetryStrategies.retryOnConflict(20, 100)
     );
     this.sparkCompat = SparkCompatReader.get(cConf);
+    this.taskStateCleanup = taskKey -> Transactionals.execute(transactional, dsContext -> {
+      ProvisionerDataset provisionerDataset = ProvisionerDataset.get(dsContext, datasetFramework);
+      provisionerDataset.deleteTaskInfo(taskKey);
+    });
   }
 
   @Override
   protected void startUp() throws Exception {
     LOG.info("Starting {}", getClass().getSimpleName());
     reloadProvisioners();
-    // TODO: CDAP-13246 check ProvisionerDataset to find any operations that are supposed to be in progress and
-    // pick up where they left off
     this.executorService = Executors.newCachedThreadPool(Threads.createDaemonThreadFactory("provisioning-service-%d"));
+    this.taskExecutor = new KeyedExecutor<>(executorService);
+    scanForTasks(taskStateCleanup);
   }
 
   @Override
@@ -122,6 +134,54 @@ public class ProvisioningService extends AbstractIdleService {
       // Ignore it.
     }
     LOG.info("Stopped {}", getClass().getSimpleName());
+  }
+
+  /**
+   * Scans the ProvisionerDataset for any tasks that should be in progress but are not being executed and consumes
+   * them.
+   */
+  @VisibleForTesting
+  void scanForTasks(Consumer<ProvisioningTaskKey> taskCleanup) {
+    List<ProvisioningTaskInfo> clusterTaskInfos = Transactionals.execute(transactional, dsContext -> {
+      ProvisionerDataset provisionerDataset = ProvisionerDataset.get(dsContext, datasetFramework);
+      return provisionerDataset.listTaskInfo();
+    });
+
+    for (ProvisioningTaskInfo provisioningTaskInfo : clusterTaskInfos) {
+      ProvisioningTaskKey taskKey = provisioningTaskInfo.getTaskKey();
+      if (taskExecutor.isRunning(taskKey)) {
+        continue;
+      }
+      ProgramRunId programRunId = provisioningTaskInfo.getProgramRunId();
+
+      ClusterOp clusterOp = provisioningTaskInfo.getClusterOp();
+      String provisionerName = provisioningTaskInfo.getProvisionerName();
+      Provisioner provisioner = provisionerInfo.get().provisioners.get(provisionerName);
+
+      if (provisioner == null) {
+        // can happen if CDAP is shut down in the middle of a task, and a provisioner is removed
+        LOG.error("Could not provision cluster for program run {} because provisioner {} no longer exists.",
+                  programRunId, provisionerName);
+        provisionerNotifier.orphaned(programRunId);
+        Transactionals.execute(transactional, dsContext -> {
+          ProvisionerDataset provisionerDataset = ProvisionerDataset.get(dsContext, datasetFramework);
+          provisionerDataset.deleteTaskInfo(provisioningTaskInfo.getTaskKey());
+        });
+        continue;
+      }
+
+      Runnable task = null;
+      switch (clusterOp.getType()) {
+        case PROVISION:
+          task = createProvisionTask(provisioningTaskInfo, provisioner, taskCleanup);
+          break;
+        case DEPROVISION:
+          task = createDeprovisionTask(provisioningTaskInfo, provisioner, taskCleanup);
+          break;
+      }
+
+      executorService.execute(task);
+    }
   }
 
   /**
@@ -142,7 +202,13 @@ public class ProvisioningService extends AbstractIdleService {
    * @param datasetContext dataset context for the transaction
    * @return runnable that will actually execute the cluster provisioning
    */
-  public ProvisioningTask provision(ProvisionRequest provisionRequest, DatasetContext datasetContext) {
+  public Runnable provision(ProvisionRequest provisionRequest, DatasetContext datasetContext) {
+    return provision(provisionRequest, datasetContext, taskStateCleanup);
+  }
+
+  @VisibleForTesting
+  Runnable provision(ProvisionRequest provisionRequest, DatasetContext datasetContext,
+                     Consumer<ProvisioningTaskKey> taskCleanup) {
     ProgramRunId programRunId = provisionRequest.getProgramRunId();
     ProgramOptions programOptions = provisionRequest.getProgramOptions();
     Map<String, String> args = programOptions.getArguments().asMap();
@@ -152,7 +218,7 @@ public class ProvisioningService extends AbstractIdleService {
       LOG.error("Could not provision cluster for program run {} because provisioner {} does not exist.",
                 programRunId, name);
       provisionerNotifier.deprovisioned(programRunId);
-      return new NoOpProvisioningTask(programRunId);
+      return () -> { };
     }
 
     // Generate the SSH key pair if the provisioner is not YARN
@@ -163,29 +229,19 @@ public class ProvisioningService extends AbstractIdleService {
       } catch (Exception e) {
         LOG.error("Failed to generate SSH key pair for program run {} with provisioner {}", programRunId, name, e);
         provisionerNotifier.deprovisioning(programRunId);
-        return new NoOpProvisioningTask(programRunId);
+        return () -> { };
       }
     }
 
     Map<String, String> properties = SystemArguments.getProfileProperties(args);
-    ProvisionerContext context = new DefaultProvisionerContext(programRunId, properties, sparkCompat,
-                                                               createSSHContext(sshKeyInfo));
-
     ClusterOp clusterOp = new ClusterOp(ClusterOp.Type.PROVISION, ClusterOp.Status.REQUESTING_CREATE);
-    ClusterInfo clusterInfo =
-      new ClusterInfo(programRunId, provisionRequest.getProgramDescriptor(),
-                      properties, name, provisionRequest.getUser(), clusterOp, sshKeyInfo, null);
+    ProvisioningTaskInfo provisioningTaskInfo =
+      new ProvisioningTaskInfo(programRunId, provisionRequest.getProgramDescriptor(), programOptions,
+                               properties, name, provisionRequest.getUser(), clusterOp, sshKeyInfo, null);
     ProvisionerDataset provisionerDataset = ProvisionerDataset.get(datasetContext, datasetFramework);
-    provisionerDataset.putClusterInfo(clusterInfo);
+    provisionerDataset.putTaskInfo(provisioningTaskInfo);
 
-    ProvisionTask task = new ProvisionTask(provisionRequest, provisioner, context, provisionerNotifier,
-                                           transactional, datasetFramework, sshKeyInfo);
-    return new ProvisioningTask(programRunId) {
-      @Override
-      public void run() {
-        executorService.execute(task);
-      }
-    };
+    return createProvisionTask(provisioningTaskInfo, provisioner, taskCleanup);
   }
 
   /**
@@ -197,39 +253,38 @@ public class ProvisioningService extends AbstractIdleService {
    * @param datasetContext dataset context for the transaction
    * @return runnable that will actually execute the cluster deprovisioning
    */
-  public ProvisioningTask deprovision(ProgramRunId programRunId, DatasetContext datasetContext) {
+  public Runnable deprovision(ProgramRunId programRunId, DatasetContext datasetContext) {
+    return deprovision(programRunId, datasetContext, taskStateCleanup);
+  }
+
+  @VisibleForTesting
+  Runnable deprovision(ProgramRunId programRunId, DatasetContext datasetContext,
+                       Consumer<ProvisioningTaskKey> taskCleanup) {
     ProvisionerDataset provisionerDataset = ProvisionerDataset.get(datasetContext, datasetFramework);
-    ClusterInfo existing = provisionerDataset.getClusterInfo(programRunId);
+
+    // look up information for the corresponding provision operation
+    ProvisioningTaskInfo existing =
+      provisionerDataset.getTaskInfo(new ProvisioningTaskKey(programRunId, ClusterOp.Type.PROVISION));
     if (existing == null) {
       LOG.error("Received request to de-provision a cluster for program run {}, but could not find information " +
                   "about the cluster.", programRunId);
-      // TODO: CDAP-13246 move to orphaned state
-      return new NoOpProvisioningTask(programRunId);
+      provisionerNotifier.orphaned(programRunId);
+      return () -> { };
     }
+
     Provisioner provisioner = provisionerInfo.get().provisioners.get(existing.getProvisionerName());
     if (provisioner == null) {
       LOG.error("Could not de-provision cluster for program run {} because provisioner {} does not exist.",
                 programRunId, existing.getProvisionerName());
-      // TODO: CDAP-13246 move to orphaned state
-      return new NoOpProvisioningTask(programRunId);
+      provisionerNotifier.orphaned(programRunId);
+      return () -> { };
     }
 
-    Map<String, String> properties = existing.getProvisionerProperties();
-    ProvisionerContext context = new DefaultProvisionerContext(programRunId, properties, sparkCompat,
-                                                               createSSHContext(existing.getSshKeyInfo()));
-
     ClusterOp clusterOp = new ClusterOp(ClusterOp.Type.DEPROVISION, ClusterOp.Status.REQUESTING_DELETE);
-    ClusterInfo clusterInfo = new ClusterInfo(existing, clusterOp, existing.getCluster());
-    provisionerDataset.putClusterInfo(clusterInfo);
+    ProvisioningTaskInfo provisioningTaskInfo = new ProvisioningTaskInfo(existing, clusterOp, existing.getCluster());
+    provisionerDataset.putTaskInfo(provisioningTaskInfo);
 
-    DeprovisionTask task = new DeprovisionTask(programRunId, provisioner, context, provisionerNotifier,
-                                               locationFactory, transactional, datasetFramework);
-    return new ProvisioningTask(programRunId) {
-      @Override
-      public void run() {
-        executorService.execute(task);
-      }
-    };
+    return createDeprovisionTask(provisioningTaskInfo, provisioner, taskCleanup);
   }
 
   /**
@@ -287,6 +342,32 @@ public class ProvisioningService extends AbstractIdleService {
     provisioner.validateProperties(properties);
   }
 
+  private Runnable createProvisionTask(ProvisioningTaskInfo taskInfo, Provisioner provisioner,
+                                       Consumer<ProvisioningTaskKey> taskCleanup) {
+    ProgramRunId programRunId = taskInfo.getProgramRunId();
+    ProvisionerContext context = new DefaultProvisionerContext(programRunId, taskInfo.getProvisionerProperties(),
+                                                               sparkCompat, createSSHContext(taskInfo.getSshKeyInfo()));
+    ProvisioningTaskKey taskKey = new ProvisioningTaskKey(programRunId, ClusterOp.Type.PROVISION);
+
+    // TODO: (CDAP-13246) pick up timeout from profile instead of hardcoding
+    Runnable task = new ProvisionTask(taskInfo, provisioner, context, provisionerNotifier, transactional,
+                                      datasetFramework, 300);
+    return new TaskWithCleanup(taskKey, task, taskCleanup);
+  }
+
+  private Runnable createDeprovisionTask(ProvisioningTaskInfo taskInfo, Provisioner provisioner,
+                                         Consumer<ProvisioningTaskKey> taskCleanup) {
+    Map<String, String> properties = taskInfo.getProvisionerProperties();
+    ProvisionerContext context = new DefaultProvisionerContext(taskInfo.getProgramRunId(), properties,
+                                                               sparkCompat, createSSHContext(taskInfo.getSshKeyInfo()));
+    ProvisioningTaskKey taskKey = new ProvisioningTaskKey(taskInfo.getProgramRunId(), ClusterOp.Type.DEPROVISION);
+    Runnable task = new DeprovisionTask(taskInfo, provisioner, context, provisionerNotifier,
+                                        locationFactory, transactional, datasetFramework, 300);
+
+    return new TaskWithCleanup(taskKey, task, taskCleanup) {
+    };
+  }
+
   /**
    * Generates a SSH key pair.
    */
@@ -339,6 +420,32 @@ public class ProvisioningService extends AbstractIdleService {
     private ProvisionerInfo(Map<String, Provisioner> provisioners, Map<String, ProvisionerDetail> details) {
       this.provisioners = Collections.unmodifiableMap(provisioners);
       this.details = Collections.unmodifiableMap(details);
+    }
+  }
+
+  /**
+   * Wrapper around another Runnable that adds task Futures to the tasks map on start and removes them on completion.
+   */
+  private class TaskWithCleanup implements Runnable {
+    private final ProvisioningTaskKey taskKey;
+    private final Runnable task;
+    private final Consumer<ProvisioningTaskKey> taskCleanup;
+
+    private TaskWithCleanup(ProvisioningTaskKey taskKey, Runnable task, Consumer<ProvisioningTaskKey> taskCleanup) {
+      this.taskKey = taskKey;
+      this.task = task;
+      this.taskCleanup = taskCleanup;
+    }
+
+    @Override
+    public void run() {
+      try {
+        taskExecutor.submit(taskKey, task).get();
+      } catch (InterruptedException | ExecutionException e) {
+        // in either case, leave logging up to the task itself and proceed to cleanup
+      } finally {
+        taskCleanup.accept(taskKey);
+      }
     }
   }
 }

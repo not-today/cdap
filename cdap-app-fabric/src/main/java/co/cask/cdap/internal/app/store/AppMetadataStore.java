@@ -570,6 +570,57 @@ public class AppMetadataStore extends MetadataStoreDataset {
   }
 
   /**
+   * Record that the program run has been orphaned. If the current status has a higher source id,
+   * this call will be ignored.
+   *
+   * @param programRunId program run
+   * @param sourceId unique id representing the source of program run status, such as the message id of the program
+   *                 run status notification in TMS. The source id must increase as the recording time of the program
+   *                 run status increases, so that the attempt to persist program run status older than the existing
+   *                 program run status will be ignored
+   * @return {@link RunRecordMeta} that was persisted, or {@code null} if the update was ignored.
+   */
+  @Nullable
+  public RunRecordMeta recordProgramOrphaned(ProgramRunId programRunId, byte[] sourceId) {
+    MDSKey.Builder key = getProgramKeyBuilder(TYPE_RUN_RECORD_COMPLETED, programRunId.getParent());
+
+    RunRecordMeta existing = getRun(programRunId);
+    if (existing == null) {
+      LOG.debug("Ignoring unexpected transition of program run {} to cluster state {} with no existing run record.",
+                programRunId, ProgramRunClusterStatus.DEPROVISIONED);
+      return null;
+    } else if (!isValid(existing, sourceId, "orphaned")) {
+      return null;
+    }
+
+    ProgramRunClusterStatus clusterStatus = existing.getCluster().getStatus();
+    // should only be able to get to orphaned from the provisioning or deprovisioning states
+    if (clusterStatus != ProgramRunClusterStatus.PROVISIONING &&
+      clusterStatus != ProgramRunClusterStatus.DEPROVISIONING) {
+      LOG.warn("Ignoring unexpected request to transition program run {} from cluster state {} to cluster state {}.",
+               programRunId, clusterStatus, ProgramRunClusterStatus.ORPHANED);
+      return null;
+    }
+
+    delete(existing);
+    key.add(getInvertedTsKeyPart(existing.getStartTs())).add(programRunId.getRun()).build();
+
+    // if the previous state was provisioning, that means we've transitioned here from a failure
+    ProgramRunStatus newStatus = clusterStatus == ProgramRunClusterStatus.PROVISIONING ?
+      ProgramRunStatus.FAILED : existing.getStatus();
+    ProgramRunCluster cluster = new ProgramRunCluster(ProgramRunClusterStatus.ORPHANED,
+                                                      null, existing.getCluster().getNumNodes());
+    RunRecordMeta meta = RunRecordMeta.builder(existing)
+      .setCluster(cluster)
+      .setSourceId(sourceId)
+      .setStatus(newStatus)
+      .build();
+    write(key.build(), meta);
+    LOG.trace("Recorded {} for program {}", ProgramRunClusterStatus.ORPHANED, programRunId);
+    return meta;
+  }
+
+  /**
    * Logs initialization of program run and persists program status to {@link ProgramRunStatus#STARTING}.
    * @param programRunId run id of the program
    * @param twillRunId Twill run id

@@ -91,7 +91,7 @@ public final class Retries {
    *   If the call was interrupted while waiting between retries, the {@link InterruptedException} will be added
    *   as a suppressed exception
    */
-  public static <V> V supplyWithRetries(final Supplier<V> supplier, RetryStrategy retryStrategy,
+  public static <V> V supplyWithRetries(Supplier<V> supplier, RetryStrategy retryStrategy,
                                         Predicate<Throwable> isRetryable) {
     return callWithRetries(supplier::get, retryStrategy, isRetryable);
   }

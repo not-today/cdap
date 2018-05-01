@@ -108,6 +108,11 @@ public class ProvisionerNotifier {
               .put(ProgramOptionConstants.CLUSTER_STATUS, ProgramRunClusterStatus.DEPROVISIONED.name()).build());
   }
 
+  public void orphaned(ProgramRunId programRunId) {
+    publish(ImmutableMap.<String, String>builder()
+              .put(ProgramOptionConstants.PROGRAM_RUN_ID, GSON.toJson(programRunId))
+              .put(ProgramOptionConstants.CLUSTER_STATUS, ProgramRunClusterStatus.ORPHANED.name()).build());
+  }
 
   private void publish(Map<String, String> properties) {
     final StoreRequest storeRequest = StoreRequestBuilder.of(topic)
