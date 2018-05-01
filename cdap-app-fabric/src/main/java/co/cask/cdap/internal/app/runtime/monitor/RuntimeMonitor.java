@@ -21,8 +21,6 @@ import co.cask.cdap.api.Transactionals;
 import co.cask.cdap.api.common.Bytes;
 import co.cask.cdap.api.data.DatasetContext;
 import co.cask.cdap.api.messaging.MessagePublisher;
-import co.cask.cdap.api.retry.RetriesExhaustedException;
-import co.cask.cdap.api.retry.RetryableException;
 import co.cask.cdap.client.config.ClientConfig;
 import co.cask.cdap.client.util.RESTClient;
 import co.cask.cdap.common.conf.CConfiguration;
@@ -93,11 +91,11 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   // caches request key to topic
   private final Map<String, String> requestKeyToLocalTopic;
 
-  private final MessagePublisher messagePublisher;
   private final long pollTimeMillis;
   private final long gracefulShutdownMillis;
   private final List<MonitorMessage> lastProgramStateMessages;
   private final DatasetFramework dsFramework;
+  private final MultiThreadMessagingContext messagingContext;
   private final Transactional transactional;
   private final RetryStrategy retryStrategy;
   private volatile Thread runThread;
@@ -110,7 +108,6 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
                         DatasetFramework datasetFramework, TransactionSystemClient txClient) {
     this.programRunId = programRunId;
     this.cConf = cConf;
-    this.messagePublisher = new MultiThreadMessagingContext(messagingService).getMessagePublisher();
     this.clientConfig = clientConfig;
     this.restClient = new RESTClient(clientConfig);
     this.limit = cConf.getInt(Constants.RuntimeMonitor.BATCH_LIMIT);
@@ -119,15 +116,18 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
     this.topicsToRequest = new HashMap<>();
     this.requestKeyToLocalTopic = new HashMap<>();
     this.dsFramework = datasetFramework;
+    this.messagingContext = new MultiThreadMessagingContext(messagingService);
     this.transactional = Transactions.createTransactionalWithRetry(
       Transactions.createTransactional(new MultiThreadDatasetCache(
         new SystemDatasetInstantiator(datasetFramework), new TransactionSystemClientAdapter(txClient),
-        NamespaceId.SYSTEM, Collections.emptyMap(), null, null)),
+        NamespaceId.SYSTEM, Collections.emptyMap(), null, null, messagingContext)),
       org.apache.tephra.RetryStrategies.retryOnConflict(20, 100)
     );
     this.programFinishTime = -1L;
     this.lastProgramStateMessages = new ArrayList<>();
-    this.retryStrategy = RetryStrategies.fixDelay(1, TimeUnit.SECONDS);
+    this.retryStrategy = RetryStrategies.timeLimit(cConf.getLong(Constants.RuntimeMonitor.RETRY_TIMEOUT_MS),
+                                                   TimeUnit.MILLISECONDS,
+                                                   RetryStrategies.fixDelay(1, TimeUnit.SECONDS));
   }
 
   @Override
@@ -149,7 +149,7 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
       });
 
       return null;
-    }, false);
+    });
   }
 
   @Override
@@ -284,12 +284,10 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
       // TODO: Kill the remote program execute on explicit stop on this monitor
     }
 
-    if (lastProgramStateMessages.isEmpty()) {
-      // Publish the remaining program state messages. We should retry indefinitely
+    if (!lastProgramStateMessages.isEmpty()) {
       String topicConfig = Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC;
       String topic = requestKeyToLocalTopic.get(topicConfig);
 
-      try {
         callWithRetries((Retries.Callable<Void, TransactionFailureException>) () -> {
           Transactionals.execute(transactional, context -> {
             publish(topicConfig, topic, lastProgramStateMessages, context);
@@ -301,10 +299,7 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
             }
           });
           return null;
-        }, true);
-      } catch (TransactionFailureException e) {
-        throw new RetryableException(e);
-      }
+        });
     }
   }
 
@@ -348,7 +343,7 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
           return publish(topicConfig, requestKeyToLocalTopic.get(topicConfig), monitorMessages, context);
         });
         return null;
-      }, false);
+      });
 
       latestPublishTime = publishTime == null ? latestPublishTime : Math.max(publishTime, latestPublishTime);
     }
@@ -361,11 +356,11 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
    *
    * @return the latest message publish time or {@code -1L} if there is no message to process
    */
-  private long publish(String topicConfig, String topic, List<MonitorMessage> messages, DatasetContext context)
-    throws Exception {
+  private long publish(String topicConfig, String topic,
+                       List<MonitorMessage> messages, DatasetContext context) throws Exception {
+    MessagePublisher messagePublisher = messagingContext.getMessagePublisher();
     messagePublisher.publish(NamespaceId.SYSTEM.getNamespace(), topic,
-                             messages.stream().map(s -> s.getMessage().getBytes(StandardCharsets.UTF_8))
-                               .iterator());
+                             messages.stream().map(s -> s.getMessage().getBytes(StandardCharsets.UTF_8)).iterator());
     MonitorMessage lastMessage = updateTopicToRequest(topicConfig, messages);
     AppMetadataStore.create(cConf, context, dsFramework).persistSubscriberState(topicConfig, programRunId.getRun(),
                                                                                 lastMessage.getMessageId());
@@ -445,50 +440,12 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
     return idx < 0 ? cConf.get(topicConfig) : cConf.get(topicConfig.substring(0, idx)) + topicConfig.substring(idx + 1);
   }
 
-  private <V, T extends Throwable> V callWithRetries(Retries.Callable<V, T> callable, boolean retryIndefinitely)
-    throws T {
-
-    int failures = 0;
-    long startTime = System.currentTimeMillis();
-    while (true) {
-      try {
-        V v = callable.call();
-        if (failures > 0) {
-          LOG.trace("Retry succeeded after {} retries and {} ms.", failures, System.currentTimeMillis() - startTime);
-        }
-        return v;
-      } catch (Throwable t) {
-        if (!(t instanceof RetryableException)) {
-          throw t;
-        }
-
-        long retryTime = getRetryStrategy(retryIndefinitely).nextRetry(++failures, startTime);
-        if (retryTime < 0) {
-          String errMsg = String.format("Retries exhausted after %d failures and %d ms.",
-                                        failures, System.currentTimeMillis() - startTime);
-          LOG.debug(errMsg);
-          t.addSuppressed(new RetriesExhaustedException(errMsg));
-          throw t;
-        }
-
-        LOG.trace("Call failed, retrying again after {} ms.", retryTime, t);
-        try {
-          TimeUnit.MILLISECONDS.sleep(retryTime);
-        } catch (InterruptedException e) {
-          // if we were interrupted while waiting for the next retry, treat it like no retries were attempted
-          t.addSuppressed(e);
-          Thread.currentThread().interrupt();
-          throw t;
-        }
-      }
+  private <V, E extends Exception> V callWithRetries(Retries.Callable<V, E> callable) {
+    try {
+      return Retries.callWithRetries(callable, retryStrategy);
+    } catch (Exception e) {
+      LOG.error("Failed to publish messages or get/update offsets after retrying for {}. ", programRunId, e);
     }
-  }
-
-  private RetryStrategy getRetryStrategy(boolean retryIndefinitely) {
-    if (isRunning() || retryIndefinitely) {
-      return retryStrategy;
-    }
-    // If failure happen during shutdown, use a retry strategy that only retry fixed number of times
-    return RetryStrategies.timeLimit(5, TimeUnit.SECONDS, RetryStrategies.fixDelay(200, TimeUnit.MILLISECONDS));
+    return null;
   }
 }

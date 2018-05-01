@@ -2387,6 +2387,14 @@
     </description>
   </property>
 
+  <property>
+    <name>app.program.runtime.monitor.retry.timeout.ms</name>
+    <value>60000</value>
+    <description>
+      CDAP Runtime monitor retry timeout in milliseconds.
+    </description>
+  </property>
+
   <!-- Notification System Configuration -->
 
   <property>
