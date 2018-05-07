@@ -1420,12 +1420,7 @@ public class AppMetadataStore extends MetadataStoreDataset {
    */
   public void deleteSubscriberState(String topic, String subscriber) {
     MDSKey.Builder keyBuilder = new MDSKey.Builder().add(TYPE_MESSAGE).add(topic);
-
-    // For backward compatibility, skip the subscriber part if it is empty or null
-    if (subscriber != null && !subscriber.isEmpty()) {
-      keyBuilder.add(subscriber);
-    }
-
+    keyBuilder.add(subscriber);
     delete(keyBuilder.build());
   }
 

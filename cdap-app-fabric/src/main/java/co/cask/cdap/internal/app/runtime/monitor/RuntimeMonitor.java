@@ -19,7 +19,6 @@ package co.cask.cdap.internal.app.runtime.monitor;
 import co.cask.cdap.api.Transactional;
 import co.cask.cdap.api.Transactionals;
 import co.cask.cdap.api.common.Bytes;
-import co.cask.cdap.api.data.DatasetContext;
 import co.cask.cdap.api.messaging.MessagePublisher;
 import co.cask.cdap.client.config.ClientConfig;
 import co.cask.cdap.client.util.RESTClient;
@@ -50,7 +49,6 @@ import co.cask.common.http.HttpResponse;
 import com.google.common.reflect.TypeToken;
 import com.google.common.util.concurrent.AbstractExecutionThreadService;
 import com.google.gson.Gson;
-import org.apache.tephra.TransactionFailureException;
 import org.apache.tephra.TransactionSystemClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -98,6 +96,7 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   private final MultiThreadMessagingContext messagingContext;
   private final Transactional transactional;
   private final RetryStrategy retryStrategy;
+  private AppMetadataStore store;
   private volatile Thread runThread;
   private volatile boolean stopped;
   private volatile boolean killed;
@@ -139,17 +138,14 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
       requestKeyToLocalTopic.put(topicConfig, getTopic(topicConfig));
     }
 
-    callWithRetries((Retries.Callable<Void, TransactionFailureException>) () -> {
-      Transactionals.execute(transactional, context -> {
-        for (String topicConfig : topicConfigs) {
-          String messageId = AppMetadataStore.create(cConf, context, dsFramework)
-            .retrieveSubscriberState(topicConfig, programRunId.getRun());
-          topicsToRequest.put(topicConfig, new MonitorConsumeRequest(messageId, limit));
-        }
-      });
+    Retries.runWithRetries(() -> Transactionals.execute(transactional, context -> {
+      store = AppMetadataStore.create(cConf, context, dsFramework);
 
-      return null;
-    });
+      for (String topicConfig : topicConfigs) {
+        String messageId = store.retrieveSubscriberState(topicConfig, programRunId.getRun());
+        topicsToRequest.put(topicConfig, new MonitorConsumeRequest(messageId, limit));
+      }
+    }), retryStrategy);
   }
 
   @Override
@@ -288,18 +284,14 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
       String topicConfig = Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC;
       String topic = requestKeyToLocalTopic.get(topicConfig);
 
-        callWithRetries((Retries.Callable<Void, TransactionFailureException>) () -> {
-          Transactionals.execute(transactional, context -> {
-            publish(topicConfig, topic, lastProgramStateMessages, context);
+      Retries.runWithRetries(() -> Transactionals.execute(transactional, context -> {
+        publish(topicConfig, topic, lastProgramStateMessages);
 
-            // cleanup all the offsets after publishing terminal states.
-            for (String topicConf : requestKeyToLocalTopic.keySet()) {
-              AppMetadataStore.create(cConf, context, dsFramework).deleteSubscriberState(topicConf,
-                                                                                         programRunId.getRun());
-            }
-          });
-          return null;
-        });
+        // cleanup all the offsets after publishing terminal states.
+        for (String topicConf : requestKeyToLocalTopic.keySet()) {
+          store.deleteSubscriberState(topicConf, programRunId.getRun());
+        }
+      }), retryStrategy);
     }
   }
 
@@ -338,12 +330,12 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
         }
       }
 
-      Long publishTime = callWithRetries((Retries.Callable<Long, TransactionFailureException>) () -> {
+      Long publishTime = Retries.callWithRetries((Retries.Callable<Long, Exception>) () -> {
         Transactionals.execute(transactional, context -> {
-          return publish(topicConfig, requestKeyToLocalTopic.get(topicConfig), monitorMessages, context);
+          return publish(topicConfig, requestKeyToLocalTopic.get(topicConfig), monitorMessages);
         });
         return null;
-      });
+      }, retryStrategy);
 
       latestPublishTime = publishTime == null ? latestPublishTime : Math.max(publishTime, latestPublishTime);
     }
@@ -356,14 +348,12 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
    *
    * @return the latest message publish time or {@code -1L} if there is no message to process
    */
-  private long publish(String topicConfig, String topic,
-                       List<MonitorMessage> messages, DatasetContext context) throws Exception {
+  private long publish(String topicConfig, String topic, List<MonitorMessage> messages) throws Exception {
     MessagePublisher messagePublisher = messagingContext.getMessagePublisher();
     messagePublisher.publish(NamespaceId.SYSTEM.getNamespace(), topic,
                              messages.stream().map(s -> s.getMessage().getBytes(StandardCharsets.UTF_8)).iterator());
     MonitorMessage lastMessage = updateTopicToRequest(topicConfig, messages);
-    AppMetadataStore.create(cConf, context, dsFramework).persistSubscriberState(topicConfig, programRunId.getRun(),
-                                                                                lastMessage.getMessageId());
+    store.persistSubscriberState(topicConfig, programRunId.getRun(), lastMessage.getMessageId());
     // Messages are ordered by publish time, hence we can get the latest publish time by getting the publish time
     // from the last message.
     return getMessagePublishTime(lastMessage);
@@ -438,14 +428,5 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   private String getTopic(String topicConfig) {
     int idx = topicConfig.lastIndexOf(':');
     return idx < 0 ? cConf.get(topicConfig) : cConf.get(topicConfig.substring(0, idx)) + topicConfig.substring(idx + 1);
-  }
-
-  private <V, E extends Exception> V callWithRetries(Retries.Callable<V, E> callable) {
-    try {
-      return Retries.callWithRetries(callable, retryStrategy);
-    } catch (Exception e) {
-      LOG.error("Failed to publish messages or get/update offsets after retrying for {}. ", programRunId, e);
-    }
-    return null;
   }
 }

@@ -124,13 +124,13 @@ public class RuntimeMonitorTest {
 
   @After
   public void stop() throws Exception {
+    runtimeServer.stopAndWait();
+    datasetService.stopAndWait();
+    txManager.stopAndWait();
+
     if (messagingService instanceof Service) {
       ((Service) messagingService).stopAndWait();
     }
-
-    txManager.stopAndWait();
-    datasetService.stopAndWait();
-    runtimeServer.stopAndWait();
   }
 
   @Test
