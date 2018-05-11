@@ -20,6 +20,7 @@ import co.cask.cdap.api.Transactional;
 import co.cask.cdap.api.Transactionals;
 import co.cask.cdap.api.common.Bytes;
 import co.cask.cdap.api.messaging.MessagePublisher;
+import co.cask.cdap.api.retry.RetriesExhaustedException;
 import co.cask.cdap.client.config.ClientConfig;
 import co.cask.cdap.client.util.RESTClient;
 import co.cask.cdap.common.conf.CConfiguration;
@@ -96,7 +97,6 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   private final MultiThreadMessagingContext messagingContext;
   private final Transactional transactional;
   private final RetryStrategy retryStrategy;
-  private AppMetadataStore store;
   private volatile Thread runThread;
   private volatile boolean stopped;
   private volatile boolean killed;
@@ -132,20 +132,11 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   @Override
   protected void startUp() throws Exception {
     LOG.debug("Starting runtime monitor for program run {}.", programRunId);
-
     Set<String> topicConfigs = getTopicConfigs();
+
     for (String topicConfig : topicConfigs) {
       requestKeyToLocalTopic.put(topicConfig, getTopic(topicConfig));
     }
-
-    Retries.runWithRetries(() -> Transactionals.execute(transactional, context -> {
-      store = AppMetadataStore.create(cConf, context, dsFramework);
-
-      for (String topicConfig : topicConfigs) {
-        String messageId = store.retrieveSubscriberState(topicConfig, programRunId.getRun());
-        topicsToRequest.put(topicConfig, new MonitorConsumeRequest(messageId, limit));
-      }
-    }), retryStrategy);
   }
 
   @Override
@@ -213,6 +204,9 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   protected void run() {
     runThread = Thread.currentThread();
     boolean shutdownRemoteRuntime = false;
+    long startTime = System.currentTimeMillis();
+    long sleepTime;
+    int failures = 0;
 
     try {
       while (!stopped && !killed) {
@@ -224,6 +218,12 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
                       programRunId, programFinishTime, clientConfig.resolveURL("runtime"));
             triggerRuntimeShutdown();
             break;
+          }
+
+          // Its possible that topicsToRequest is partially populated. So make sure we have all
+          // the topics included in topicsToRequest
+          if(topicsToRequest.isEmpty() || topicsToRequest.size() != requestKeyToLocalTopic.size()) {
+            initTopics();
           }
 
           // Next to fetch data from the remote runtime
@@ -238,7 +238,18 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
           Map<String, List<MonitorMessage>> monitorResponses =
             GSON.fromJson(response.getResponseBodyAsString(StandardCharsets.UTF_8), MAP_STRING_MESSAGE_TYPE);
 
-          long latestPublishTime = processResponse(monitorResponses);
+          // If terminal program status has been received, update in memory programFinishTime before publishing messages
+          if (monitorResponses.containsKey(Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC)) {
+            updateProgramFinishTime(monitorResponses);
+          }
+
+          startTime = System.currentTimeMillis();
+          failures = 0;
+          // Publish messages for all the topics and persist corresponding offsets in a single transaction.
+          long latestPublishTime = Transactionals.execute(transactional, context -> {
+            AppMetadataStore store = AppMetadataStore.create(cConf, context, dsFramework);
+            return processResponse(monitorResponses, store);
+          });
 
           // If we got the program finished state, determine when to shutdown
           if (programFinishTime > 0) {
@@ -255,9 +266,7 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
             }
           }
 
-          Thread.sleep(pollTimeMillis);
-        } catch (InterruptedException e) {
-          // Interruption means stopping the service.
+          sleepTime = pollTimeMillis;
         } catch (Exception e) {
           if (programFinishTime < 0) {
             // TODO: CDAP-13343 Shouldn't just loop infinitely.
@@ -265,8 +274,16 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
             OUTAGE_LOG.warn("Failed to fetch monitoring data from program run {}. Will be retried in next iteration.",
                             programRunId, e);
           }
+          sleepTime = retryStrategy.nextRetry(failures++, startTime);
 
-          Thread.sleep(pollTimeMillis);
+          if (sleepTime < 0) {
+            throw new RetriesExhaustedException(String.format("Retries Exhausted after %d failures and %d ms. ",
+                                                failures, System.currentTimeMillis() - startTime), e);
+          }
+        }
+
+        if (!stopped && !killed) {
+          TimeUnit.MILLISECONDS.sleep(sleepTime);
         }
       }
     } catch (InterruptedException e) {
@@ -284,8 +301,10 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
       String topicConfig = Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC;
       String topic = requestKeyToLocalTopic.get(topicConfig);
 
+      // Publish last program state messages with Retries
       Retries.runWithRetries(() -> Transactionals.execute(transactional, context -> {
-        publish(topicConfig, topic, lastProgramStateMessages);
+        AppMetadataStore store = AppMetadataStore.create(cConf, context, dsFramework);
+        publish(topicConfig, topic, lastProgramStateMessages, store);
 
         // cleanup all the offsets after publishing terminal states.
         for (String topicConf : requestKeyToLocalTopic.keySet()) {
@@ -295,52 +314,66 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
     }
   }
 
+  private void initTopics() {
+    Transactionals.execute(transactional, context -> {
+      AppMetadataStore store = AppMetadataStore.create(cConf, context, dsFramework);
+
+      for (String topicConfig : requestKeyToLocalTopic.keySet()) {
+        String messageId = store.retrieveSubscriberState(topicConfig, programRunId.getRun());
+        topicsToRequest.put(topicConfig, new MonitorConsumeRequest(messageId, limit));
+      }
+    });
+  }
+
   /**
    * Processes the given set of monitoring messages.
    *
    * @param monitorResponses set of messages to be processed.
    * @return the latest message publish time or {@code -1L} if there is no message to process
    */
-  private long processResponse(Map<String, List<MonitorMessage>> monitorResponses) throws Exception {
+  private long processResponse(Map<String, List<MonitorMessage>> monitorResponses,
+                               AppMetadataStore store) throws Exception {
     long latestPublishTime = -1L;
 
     for (Map.Entry<String, List<MonitorMessage>> monitorResponse : monitorResponses.entrySet()) {
       String topicConfig = monitorResponse.getKey();
       List<MonitorMessage> monitorMessages = monitorResponse.getValue();
 
-      if (monitorMessages.isEmpty()) {
+      // Skip terminal program status messages to delay the deprovisioning.
+      if (monitorMessages.isEmpty() ||
+        (topicConfig.equals(Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC) && programFinishTime > 0)) {
         continue;
       }
 
-      if (topicConfig.equals(Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC)) {
-        if (programFinishTime < 0) {
-          programFinishTime = findProgramFinishTime(monitorMessages);
-        }
-
-        if (programFinishTime >= 0) {
-          // Buffer the program state messages and don't publish them until the end
-          // Otherwise, once we publish, the deprovisioner will kick in and delete the cluster
-          // which could result in losing the last set of messages for some topics.
-          lastProgramStateMessages.addAll(monitorMessages);
-          // We still update the in memory store for the next fetch offset to avoid fetching duplicate
-          // messages, however, that shouldn't be persisted to avoid potential loss of messages
-          // in case of failure
-          updateTopicToRequest(topicConfig, monitorMessages);
-          continue;
-        }
-      }
-
-      Long publishTime = Retries.callWithRetries((Retries.Callable<Long, Exception>) () -> {
-        Transactionals.execute(transactional, context -> {
-          return publish(topicConfig, requestKeyToLocalTopic.get(topicConfig), monitorMessages);
-        });
-        return null;
-      }, retryStrategy);
-
-      latestPublishTime = publishTime == null ? latestPublishTime : Math.max(publishTime, latestPublishTime);
+      long publishTime = publish(topicConfig, requestKeyToLocalTopic.get(topicConfig), monitorMessages, store);
+      latestPublishTime = Math.max(publishTime, latestPublishTime);
     }
 
     return latestPublishTime;
+  }
+
+  private void updateProgramFinishTime(Map<String, List<MonitorMessage>> monitorResponses) {
+    List<MonitorMessage> programStatusMessages = monitorResponses.get(Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC);
+
+    if (programStatusMessages.isEmpty()) {
+      return;
+    }
+
+    if (programFinishTime < 0) {
+      programFinishTime = findProgramFinishTime(programStatusMessages);
+    }
+
+    if (programFinishTime >= 0) {
+      List<MonitorMessage> messages = monitorResponses.get(Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC);
+      // Buffer the program state messages and don't publish them until the end
+      // Otherwise, once we publish, the deprovisioner will kick in and delete the cluster
+      // which could result in losing the last set of messages for some topics.
+      lastProgramStateMessages.addAll(messages);
+      // We still update the in memory store for the next fetch offset to avoid fetching duplicate
+      // messages, however, that shouldn't be persisted to avoid potential loss of messages
+      // in case of failure
+      updateTopicToRequest(Constants.AppFabric.PROGRAM_STATUS_EVENT_TOPIC, messages);
+    }
   }
 
   /**
@@ -348,12 +381,20 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
    *
    * @return the latest message publish time or {@code -1L} if there is no message to process
    */
-  private long publish(String topicConfig, String topic, List<MonitorMessage> messages) throws Exception {
+  private long publish(String topicConfig, String topic, List<MonitorMessage> messages,
+                       AppMetadataStore store) throws Exception {
+    // publish messages to tms
     MessagePublisher messagePublisher = messagingContext.getMessagePublisher();
     messagePublisher.publish(NamespaceId.SYSTEM.getNamespace(), topic,
                              messages.stream().map(s -> s.getMessage().getBytes(StandardCharsets.UTF_8)).iterator());
-    MonitorMessage lastMessage = updateTopicToRequest(topicConfig, messages);
+
+    // persist the last published message as offset in meta store
+    MonitorMessage lastMessage = messages.get(messages.size() - 1);
     store.persistSubscriberState(topicConfig, programRunId.getRun(), lastMessage.getMessageId());
+
+    // Messages have been successfully published, update in memory offset state
+    updateTopicToRequest(topicConfig, messages);
+
     // Messages are ordered by publish time, hence we can get the latest publish time by getting the publish time
     // from the last message.
     return getMessagePublishTime(lastMessage);
@@ -362,10 +403,9 @@ public class RuntimeMonitor extends AbstractExecutionThreadService {
   /**
    * Updates the in memory map for the given topic and consume request based on the messages being processed.
    */
-  private MonitorMessage updateTopicToRequest(String topicConfig, List<MonitorMessage> messages) {
+  private void updateTopicToRequest(String topicConfig, List<MonitorMessage> messages) {
     MonitorMessage lastMessage = messages.get(messages.size() - 1);
     topicsToRequest.put(topicConfig, new MonitorConsumeRequest(lastMessage.getMessageId(), limit));
-    return lastMessage;
   }
 
   /**
